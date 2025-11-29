@@ -1,0 +1,1 @@
+This is the web app monorepo for my project to detect AI content in photographs and videos.
