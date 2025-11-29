@@ -1,0 +1,95 @@
+# ============================================
+# Frontend (Node.js/Vite)
+# ============================================
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Dependencies
+node_modules
+frontend/node_modules
+
+# Build outputs
+dist
+dist-ssr
+frontend/dist
+frontend/dist-ssr
+
+# Local env files
+*.local
+frontend/*.local
+
+# ============================================
+# Backend (Ruby on Rails)
+# ============================================
+
+# Ignore bundler config
+backend/.bundle
+backend/vendor/bundle
+
+# Environment files
+backend/.env*
+backend/.env.local
+backend/.env.*.local
+
+# Master key and credentials
+backend/config/master.key
+backend/config/credentials/*.key
+
+# Logfiles and tempfiles
+backend/log/*
+backend/tmp/*
+!backend/log/.keep
+!backend/tmp/.keep
+
+# PID files
+backend/tmp/pids/*
+!backend/tmp/pids/.keep
+
+# Storage (uploaded files and SQLite databases)
+backend/storage/*
+!backend/storage/.keep
+backend/tmp/storage/*
+!backend/tmp/storage/.keep
+
+# Assets
+backend/app/assets/builds/*
+!backend/app/assets/builds/.keep
+backend/public/assets
+
+# Kamal deployment files
+backend/config/deploy*.yml
+backend/.kamal
+
+# ============================================
+# Editor directories and files
+# ============================================
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# ============================================
+# Development files
+# ============================================
+.devcontainer
+backend/.devcontainer
+
+# ============================================
+# Docker files (optional - uncomment if needed)
+# ============================================
+# .dockerignore
+# Dockerfile*
+# backend/Dockerfile*
+
