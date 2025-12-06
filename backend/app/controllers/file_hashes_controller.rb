@@ -4,10 +4,18 @@ require "securerandom"
 
 class FileHashesController < ApplicationController
   # Skip CSRF token verification for API endpoint
-  skip_before_action :verify_authenticity_token, if: :json_request?
+  skip_before_action :verify_authenticity_token
+  
+  # Add CORS headers for cross-origin requests
+  after_action :set_cors_headers
 
   # Maximum file size: 25MB
   MAX_FILE_SIZE = 25.megabytes
+
+  # Handle CORS preflight requests
+  def options
+    head :ok
+  end
 
   # POST /file_hashes/check
   # Accepts: { "hashes": ["hash1", "hash2", ...] }
@@ -53,7 +61,7 @@ class FileHashesController < ApplicationController
       hash, file_path = generate_hash_and_save_file(file)
 
       # Check if hash already exists (or create it)
-      file_hash_record = FileHash.find_or_create_by!(hash_value: hash)
+      _file_hash_record = FileHash.find_or_create_by!(hash_value: hash)
 
       render json: {
         hash: hash,
@@ -71,8 +79,18 @@ class FileHashesController < ApplicationController
 
   private
 
-  def json_request?
-    request.format.json?
+  def set_cors_headers
+    # Allow requests from frontend in development
+    origin = request.headers['Origin']
+    allowed_origins = ['http://localhost:5173', 'http://127.0.0.1:5173']
+    
+    if origin && (Rails.env.development? || allowed_origins.include?(origin))
+      response.headers['Access-Control-Allow-Origin'] = origin
+    end
+    
+    response.headers['Access-Control-Allow-Methods'] = 'POST, OPTIONS'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
+    response.headers['Access-Control-Max-Age'] = '86400' # 24 hours
   end
 
   # Generate hash and save file in a single pass for efficiency

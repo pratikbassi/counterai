@@ -14,7 +14,9 @@ Rails.application.routes.draw do
 
   # File hash checking endpoint
   post "file_hashes/check", to: "file_hashes#check"
+  options "file_hashes/check", to: "file_hashes#options"
   
   # File upload endpoint
   post "file_hashes/upload", to: "file_hashes#upload"
+  options "file_hashes/upload", to: "file_hashes#options"
 end
