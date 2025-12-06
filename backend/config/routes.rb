@@ -11,4 +11,10 @@ Rails.application.routes.draw do
 
   # Defines the root path route ("/")
   # root "posts#index"
+
+  # File hash checking endpoint
+  post "file_hashes/check", to: "file_hashes#check"
+  
+  # File upload endpoint
+  post "file_hashes/upload", to: "file_hashes#upload"
 end
