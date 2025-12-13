@@ -1,0 +1,15 @@
+# PyTorch ecosystem - latest versions as of December 2025
+torch>=2.9.1
+torchvision>=0.24.0
+torchaudio>=2.9.1
+
+# Image processing and computer vision
+Pillow>=11.0.0
+opencv-python>=4.10.0
+
+# Numerical computing
+numpy>=2.1.0
+
+# HTTP requests
+requests>=2.32.0
+

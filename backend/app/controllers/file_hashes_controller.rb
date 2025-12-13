@@ -63,6 +63,10 @@ class FileHashesController < ApplicationController
       # Check if hash already exists (or create it)
       _file_hash_record = FileHash.find_or_create_by!(hash_value: hash)
 
+      # Enqueue detection job with the absolute file path
+      absolute_file_path = Rails.root.join(file_path).to_s
+      DetectorJob.perform_later(absolute_file_path)
+
       render json: {
         hash: hash,
         filename: file.original_filename,
