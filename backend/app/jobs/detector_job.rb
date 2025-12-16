@@ -17,3 +17,5 @@ class DetectorJob < ApplicationJob
   end
 end
 
+
+
