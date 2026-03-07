@@ -29,7 +29,7 @@ export default function FileUpload() {
     e.preventDefault();
     
     if (!file) {
-      setError('Please select a file to upload');
+      setError('Please select a file to test');
       return;
     }
 
@@ -45,7 +45,7 @@ export default function FileUpload() {
         fileInputRef.current.value = '';
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'An error occurred during upload');
+      setError(err instanceof Error ? err.message : 'An error occurred while testing the file');
     } finally {
       setUploading(false);
     }
@@ -70,8 +70,8 @@ export default function FileUpload() {
 
   return (
     <div className="file-upload-container">
-      <h1>File Upload</h1>
-      <p className="description">Upload a file to generate its SHA-256 hash</p>
+      <h1>File tester</h1>
+      <p className="description">Test a file to generate its SHA-256 hash</p>
       
       <form onSubmit={handleSubmit} className="upload-form">
         <div className="file-input-wrapper">
@@ -104,7 +104,7 @@ export default function FileUpload() {
 
         {result && (
           <div className="success-message">
-            <h3>Upload Successful!</h3>
+            <h3>Test successful!</h3>
             <div className="result-details">
               <p><strong>Hash:</strong> <code>{result.hash}</code></p>
               <p><strong>Filename:</strong> {result.filename}</p>
@@ -120,7 +120,7 @@ export default function FileUpload() {
             disabled={!file || uploading}
             className="upload-button"
           >
-            {uploading ? 'Uploading...' : 'Upload File'}
+            {uploading ? 'Testing...' : 'Test file'}
           </button>
           
           {(file || result) && (
