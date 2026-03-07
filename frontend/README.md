@@ -1,3 +1,21 @@
+# CounterAI Frontend
+
+React + TypeScript + Vite SPA for CounterAI. Consumes the Rails backend API.
+
+## Architecture
+
+Single-page app: Vite dev server, React UI, and API client that calls the backend. Builds to static assets for deployment.
+
+## Run
+
+```bash
+npm run dev
+```
+
+Dev server runs with HMR (default Vite port, often `http://localhost:5173`).
+
+---
+
 # React + TypeScript + Vite
 
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.

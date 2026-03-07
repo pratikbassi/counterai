@@ -1,24 +1,15 @@
-# README
+# CounterAI Backend
 
-This README would normally document whatever steps are necessary to get the
-application up and running.
+Rails API backend for CounterAI. Serves the API used by the frontend.
 
-Things you may want to cover:
+## Architecture
 
-* Ruby version
+Monolithic Rails app: REST API, ActiveRecord models, and business logic in one codebase. Frontend is a separate React app that talks to this API.
 
-* System dependencies
+## Run
 
-* Configuration
+```bash
+rails s
+```
 
-* Database creation
-
-* Database initialization
-
-* How to run the test suite
-
-* Services (job queues, cache servers, search engines, etc.)
-
-* Deployment instructions
-
-* ...
+Server runs by default at `http://localhost:3000`.
