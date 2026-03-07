@@ -10,11 +10,13 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2025_11_30_000558) do
+ActiveRecord::Schema[8.1].define(version: 2026_03_07_200000) do
   create_table "file_hashes", force: :cascade do |t|
+    t.string "ai_status", default: "unknown", null: false
     t.datetime "created_at", null: false
     t.string "hash_value", limit: 255, null: false
     t.datetime "updated_at", null: false
+    t.index ["ai_status"], name: "index_file_hashes_on_ai_status"
     t.index ["hash_value"], name: "index_file_hashes_on_hash_value", unique: true
   end
 end

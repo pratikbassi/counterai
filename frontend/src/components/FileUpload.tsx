@@ -71,7 +71,7 @@ export default function FileUpload() {
   return (
     <div className="file-upload-container">
       <h1>File tester</h1>
-      <p className="description">Test a file to generate its SHA-256 hash</p>
+      <p className="description">Test your images for AI. Original: Test an image to see if it’s in the database and whether AI was detected</p>
       
       <form onSubmit={handleSubmit} className="upload-form">
         <div className="file-input-wrapper">
@@ -104,8 +104,20 @@ export default function FileUpload() {
 
         {result && (
           <div className="success-message">
-            <h3>Test successful!</h3>
+            <h3>
+              {result.found_in_database
+                ? 'Image found in database'
+                : 'Image not in database — added'}
+            </h3>
             <div className="result-details">
+              <p>
+                <strong>AI content:</strong>{' '}
+                {result.ai_status === 'ai_detected'
+                  ? 'AI Detected'
+                  : result.ai_status === 'ai_not_detected'
+                    ? 'AI Not Detected'
+                    : 'Unknown AI content'}
+              </p>
               <p><strong>Hash:</strong> <code>{result.hash}</code></p>
               <p><strong>Filename:</strong> {result.filename}</p>
               <p><strong>Size:</strong> {formatFileSize(result.size)}</p>

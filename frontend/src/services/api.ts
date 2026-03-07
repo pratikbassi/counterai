@@ -1,10 +1,15 @@
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000';
 
+/** Backend ai_status values */
+export type AiStatus = 'unknown' | 'ai_detected' | 'ai_not_detected';
+
 export interface UploadResponse {
   hash: string;
   filename: string;
   size: number;
   saved_at: string;
+  found_in_database: boolean;
+  ai_status: AiStatus;
 }
 
 export interface ApiError {

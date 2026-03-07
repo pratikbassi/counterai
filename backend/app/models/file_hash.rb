@@ -1,5 +1,10 @@
 class FileHash < ApplicationRecord
+  AI_STATUSES = %w[unknown ai_detected ai_not_detected].freeze
+
+  enum :ai_status, { unknown: "unknown", ai_detected: "ai_detected", ai_not_detected: "ai_not_detected" }
+
   validates :hash_value, presence: true, uniqueness: true, length: { maximum: 255 }
+  validates :ai_status, inclusion: { in: AI_STATUSES }
 
   # Class method to check which hashes exist in the database
   # Returns a hash mapping hash => boolean

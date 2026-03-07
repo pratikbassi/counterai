@@ -60,8 +60,9 @@ class FileHashesController < ApplicationController
       # Generate SHA-256 hash and save file in one pass for efficiency
       hash, file_path = generate_hash_and_save_file(file)
 
-      # Check if hash already exists (or create it)
-      _file_hash_record = FileHash.find_or_create_by!(hash_value: hash)
+      # Find or create record; track whether it was already in the database
+      found_in_database = FileHash.exists?(hash_value: hash)
+      file_hash_record = FileHash.find_or_create_by!(hash_value: hash)
 
       # Enqueue detection job with the absolute file path
       absolute_file_path = Rails.root.join(file_path).to_s
@@ -71,7 +72,9 @@ class FileHashesController < ApplicationController
         hash: hash,
         filename: file.original_filename,
         size: file.size,
-        saved_at: file_path
+        saved_at: file_path,
+        found_in_database: found_in_database,
+        ai_status: file_hash_record.ai_status
       }, status: :created
     rescue ActiveRecord::RecordInvalid => e
       render json: { error: "failed to save hash: #{e.message}" }, status: :unprocessable_entity
