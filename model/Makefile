@@ -14,7 +14,7 @@ ARGS ?=
 # Detection: `make detect IMG=path/to/image.jpg`
 IMG ?=
 
-.PHONY: help venv pip-upgrade install install-gpu train detect clean clean-artifacts clean-venv
+.PHONY: help venv pip-upgrade install install-gpu train classify detect clean clean-artifacts clean-venv
 
 help:
 	@echo "Targets:"
@@ -23,6 +23,7 @@ help:
 	@echo "  make install         CPU: pip install -r requirements.txt"
 	@echo "  make install-gpu     CUDA 12.8 wheels + rest of requirements (see README)"
 	@echo "  make train           Run train_entry.py (pass ARGS=\"...\" for CLI flags)"
+	@echo "  make classify IMG=... Classify an image (Real/Fake)"
 	@echo "  make detect IMG=...  Run detect.py on an image"
 	@echo "  make clean-artifacts Remove artifacts/, __pycache__, *.py[cod]"
 	@echo "  make clean-venv      Remove $(VENV)/"
@@ -50,6 +51,10 @@ train: venv
 detect: venv
 	@test -n "$(IMG)" || (echo 'Usage: make detect IMG=path/to/image.jpg' >&2; exit 1)
 	"$(PY)" detect.py "$(IMG)"
+
+classify: venv
+	@test -n "$(IMG)" || (echo 'Usage: make classify IMG=path/to/image.jpg' >&2; exit 1)
+	"$(PY)" classify.py "$(IMG)"
 
 clean-artifacts:
 	rm -rf artifacts __pycache__ .pytest_cache .mypy_cache .ruff_cache

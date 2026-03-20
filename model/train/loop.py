@@ -1,37 +1,10 @@
-from train.loop import accuracy, evaluate, evaluate_confusion_matrix, train_one_epoch
-
-__all__ = [
-    "accuracy",
-    "train_one_epoch",
-    "evaluate",
-    "evaluate_confusion_matrix",
-]
-
-from train.loop import accuracy, evaluate, evaluate_confusion_matrix, train_one_epoch
-
-__all__ = [
-    "accuracy",
-    "train_one_epoch",
-    "evaluate",
-    "evaluate_confusion_matrix",
-]
-
-from train.loop import accuracy, evaluate, evaluate_confusion_matrix, train_one_epoch
-
-__all__ = [
-    "accuracy",
-    "train_one_epoch",
-    "evaluate",
-    "evaluate_confusion_matrix",
-]
-
-# from __future__ import annotations (not valid here; wrapper-only module)
+from __future__ import annotations
 
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
 
-from train_logging import StepLogger
+from .logging import StepLogger
 
 
 def accuracy(logits: torch.Tensor, targets: torch.Tensor) -> float:
@@ -63,7 +36,6 @@ def train_one_epoch(
         labels = labels.to(device, non_blocking=True)
 
         optimizer.zero_grad(set_to_none=True)
-        # torch.cuda.amp.autocast is deprecated in recent PyTorch versions.
         with torch.amp.autocast("cuda", enabled=amp_enabled):
             logits = model(images)
             loss = criterion(logits, labels)
@@ -110,7 +82,6 @@ def evaluate(
             images = images.to(device, non_blocking=True)
             labels = labels.to(device, non_blocking=True)
 
-            # torch.cuda.amp.autocast is deprecated in recent PyTorch versions.
             with torch.amp.autocast("cuda", enabled=amp_enabled):
                 logits = model(images)
                 loss = criterion(logits, labels)
@@ -174,8 +145,6 @@ def evaluate_confusion_matrix(
             total_acc += accuracy(logits, labels)
             steps += 1
 
-            # Vectorized confusion matrix update.
-            # Map (true, pred) -> flat index: true * num_classes + pred
             flat = (labels.to(torch.int64) * num_classes) + preds.to(torch.int64)
             counts = torch.bincount(flat.cpu(), minlength=num_classes * num_classes)
             confusion += counts.reshape(num_classes, num_classes)
@@ -192,7 +161,6 @@ def evaluate_confusion_matrix(
         per_class_correct.float() / torch.clamp(per_class_total.float(), min=1.0)
     ).tolist()
 
-    # Human-friendly labels
     per_class = {
         class_names[i] if i < len(class_names) else str(i): per_class_acc[i]
         for i in range(num_classes)
