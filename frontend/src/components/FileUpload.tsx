@@ -71,7 +71,7 @@ export default function FileUpload() {
   return (
     <div className="file-upload-container">
       <h1>File tester</h1>
-      <p className="description">Test your images for AI. Original: Test an image to see if it’s in the database and whether AI was detected</p>
+      <p className="description">Test your images for AI.</p>
       
       <form onSubmit={handleSubmit} className="upload-form">
         <div className="file-input-wrapper">
