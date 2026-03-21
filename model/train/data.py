@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import os
+from collections import defaultdict
 from pathlib import Path
 from typing import Optional
 
 import torch
 from PIL import Image
-from torch.utils.data import Dataset, random_split
+from torch.utils.data import Dataset
 from torchvision import datasets
 from torchvision import transforms
 
@@ -92,6 +93,70 @@ def gather_real_fake_items(split_dir: Path) -> list[tuple[Path, int]]:
     return items
 
 
+def stratified_train_val_indices(
+    targets: list[int],
+    *,
+    val_fraction: float,
+    seed: int,
+) -> tuple[list[int], list[int]]:
+    """
+    Per-class split so each class contributes ~val_fraction to validation (ImageFolder fallback).
+
+    Tradeoff: slightly more balanced val than a single random_split; needs >=1 train per class.
+    """
+
+    by_class: dict[int, list[int]] = defaultdict(list)
+    for i, t in enumerate(targets):
+        by_class[int(t)].append(i)
+
+    g = torch.Generator().manual_seed(seed)
+    train_idx: list[int] = []
+    val_idx: list[int] = []
+
+    for _c, idxs in sorted(by_class.items()):
+        n = len(idxs)
+        if n < 2:
+            train_idx.extend(idxs)
+            continue
+        perm = torch.randperm(n, generator=g).tolist()
+        shuffled = [idxs[j] for j in perm]
+        n_val = max(1, int(round(n * val_fraction)))
+        n_val = min(n_val, n - 1)
+        val_idx.extend(shuffled[:n_val])
+        train_idx.extend(shuffled[n_val:])
+
+    train_idx.sort()
+    val_idx.sort()
+    return train_idx, val_idx
+
+
+def train_dataset_label_counts(train_ds: Dataset, num_classes: int) -> torch.Tensor:
+    """Per-class sample counts for the training set (for class weights / balanced sampling)."""
+
+    counts = torch.zeros(num_classes, dtype=torch.long)
+
+    if isinstance(train_ds, RealFakePathsDataset):
+        for _path, y in train_ds.items:
+            counts[int(y)] += 1
+        return counts
+
+    if isinstance(train_ds, torch.utils.data.Subset):
+        base = train_ds.dataset
+        targets = getattr(base, "targets", None)
+        if targets is None:
+            raise RuntimeError("Subset base dataset has no .targets; cannot count labels.")
+        for i in train_ds.indices:
+            counts[int(targets[i])] += 1
+        return counts
+
+    targets = getattr(train_ds, "targets", None)
+    if targets is None:
+        raise RuntimeError("Dataset has no .targets; cannot count labels for weighting.")
+    for t in targets:
+        counts[int(t)] += 1
+    return counts
+
+
 def discover_train_test_real_fake(dataset_path: Path, max_depth: int = 6) -> Optional[dict]:
     """
     Discover datasets shaped like:
@@ -173,6 +238,7 @@ def build_train_val_datasets(
     eval_tfms: transforms.Compose,
     val_split: float,
     seed: int,
+    stratified_val_split: bool = True,
 ) -> dict:
     """
     Returns:
@@ -194,12 +260,17 @@ def build_train_val_datasets(
         if len(train_ds) < 1 or len(val_ds) < 1:
             raise RuntimeError("Train/Test split discovery produced empty datasets.")
 
+        t_counts = torch.zeros(num_classes, dtype=torch.long)
+        for _path, y in split_data["train_items"]:
+            t_counts[int(y)] += 1
+
         return {
             "train_ds": train_ds,
             "val_ds": val_ds,
             "class_names": class_names,
             "num_classes": num_classes,
             "imagefolder_root": split_data["split_root"],
+            "train_label_counts": t_counts,
             "data_loading": {
                 "mode": "train_test_real_fake",
                 "train_dir": str(split_data["train_dir"]),
@@ -219,19 +290,32 @@ def build_train_val_datasets(
     if num_classes < 2:
         raise RuntimeError(f"Expected >=2 classes, got {num_classes}: {class_names}")
 
-    val_size = max(1, int(num_samples * val_split))
-    train_size = num_samples - val_size
-    if train_size < 1:
-        raise RuntimeError("Train split too small. Reduce --val-split.")
+    targets_list = list(base_ds.targets)
 
-    g = torch.Generator().manual_seed(seed)
-    train_subset, val_subset = random_split(base_ds, [train_size, val_size], generator=g)
+    if stratified_val_split:
+        train_indices, val_indices = stratified_train_val_indices(
+            targets_list, val_fraction=val_split, seed=seed
+        )
+        if len(train_indices) < 1 or len(val_indices) < 1:
+            raise RuntimeError("Stratified split produced an empty split. Adjust --val-split.")
+        data_loading_meta = {"mode": "stratified_imagefolder_split", "val_split": val_split}
+    else:
+        val_size = max(1, int(num_samples * val_split))
+        train_size = num_samples - val_size
+        if train_size < 1:
+            raise RuntimeError("Train split too small. Reduce --val-split.")
+        g = torch.Generator().manual_seed(seed)
+        perm = torch.randperm(num_samples, generator=g).tolist()
+        val_indices = perm[:val_size]
+        train_indices = perm[val_size:]
+        data_loading_meta = {"mode": "random_imagefolder_split", "val_split": val_split}
 
-    # Re-wrap subsets with distinct transforms for train/val.
     train_ds = datasets.ImageFolder(root=str(root), transform=train_tfms)
     val_ds = datasets.ImageFolder(root=str(root), transform=eval_tfms)
-    train_ds = torch.utils.data.Subset(train_ds, train_subset.indices)
-    val_ds = torch.utils.data.Subset(val_ds, val_subset.indices)
+    train_ds = torch.utils.data.Subset(train_ds, train_indices)
+    val_ds = torch.utils.data.Subset(val_ds, val_indices)
+
+    t_counts = train_dataset_label_counts(train_ds, num_classes)
 
     return {
         "train_ds": train_ds,
@@ -239,6 +323,7 @@ def build_train_val_datasets(
         "class_names": class_names,
         "num_classes": num_classes,
         "imagefolder_root": root,
-        "data_loading": {"mode": "random_imagefolder_split"},
+        "train_label_counts": t_counts,
+        "data_loading": data_loading_meta,
     }
 

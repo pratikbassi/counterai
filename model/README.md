@@ -61,25 +61,66 @@ print(path)
 Run training:
 
 ```bash
-python train_entry.py
+make train
 ```
 
 Optional arguments:
 
 ```bash
-python train_entry.py --epochs 12 --batch-size 64 --lr 0.0002 --out-dir artifacts
+make train ARGS="--epochs 12 --batch-size 64 --lr 0.0002 --out-dir artifacts"
+```
+
+Improved fine-tuning run (recommended):
+
+```bash
+make train ARGS="--epochs 12 --batch-size 64 --num-workers 12 --head-epochs 2 --backbone-lr 1e-5 --scheduler cosine"
 ```
 
 Outputs:
-- `artifacts/best_real_fake_resnet18.pt` (best checkpoint by validation accuracy)
-- `artifacts/train_metrics.json` (config + epoch metrics)
-- After training, the script prints per-class validation accuracy and a 2x2 confusion matrix (Real/Fake).
+- `artifacts/best_real_fake.pt` (rolling best checkpoint; includes `architecture`, optional `temperature`)
+- `artifacts/best_real_fake_resnet18.pt` (duplicate mirror when training **ResNet-18** only, for older scripts)
+- `artifacts/best_real_fake_<metrics_stamp>.pt` (archived copy of that run’s best weights)
+- `artifacts/train_metrics.json` (always overwritten: latest run’s full metrics)
+- `artifacts/train_metrics_YYYYMMDD_HHMMSS.json` (and `..._seedN` when using `--extra-seeds`)
+- After training: per-class recall, balanced accuracy, macro-F1, and confusion matrix on val.
 
 Notes:
-- The script auto-discovers an `ImageFolder`-compatible dataset root (`class_a/`, `class_b/`, ...).
-- Default model is transfer learning with `resnet18` for good speed/quality tradeoff.
-- For larger datasets, start by increasing `--num-workers` and `--batch-size` gradually to improve throughput.
-- If you see `PIL.Image.DecompressionBombWarning` in the console, run with `--disable-decompression-bomb-warning`.
+- The script auto-discovers an `ImageFolder`-compatible dataset root (`class_a/`, `class_b/`, ...), or **Train/Test + Real/Fake** folders.
+- Default backbone is **ResNet-18**; use `--architecture resnet50` or `efficientnet_b0` for more capacity (slower / larger checkpoints).
+- Staged fine-tuning: classifier head warmup, then backbone + head (ResNet: `layer4` [+ optional `layer3`]; EfficientNet: `features` + classifier).
+- Transforms use ImageNet normalization; optional **RandAugment**, **JPEG recompression**, and **strong** ColorJitter.
+- **Stratified** train/val split for ImageFolder fallback (disable with `--no-stratified-val-split`).
+- **Class imbalance:** `--class-weights` (loss) and/or `--balance-sampler` (WeightedRandomSampler).
+- **Label smoothing:** `--label-smoothing 0.05` (CrossEntropyLoss).
+- **EMA:** `--ema` smooths weights for eval and the saved checkpoint.
+- **Scheduler:** `--scheduler cosine` (default) or `plateau` (ReduceLROnPlateau on the monitored metric).
+- **Early stopping / best checkpoint** follow `--early-stopping-metric`: `val_acc`, `balanced_acc`, or `macro_f1`.
+- **Temperature scaling:** `--fit-temperature` refits a scalar T on val; `classify.py` divides logits by T.
+- **Multi-seed runs:** `--extra-seeds 43,44` (sequential runs, separate metrics files).
+- For throughput, tune `--num-workers` and `--batch-size`.
+- If you see `PIL.Image.DecompressionBombWarning`, use `--disable-decompression-bomb-warning`.
+
+Example (stronger aug + macro-F1 early stopping + EMA):
+
+```bash
+make train ARGS="--strong-aug-preset --early-stopping-metric macro_f1 --ema --epochs 20 --early-stopping-patience 5"
+```
+
+Early stopping usage example:
+
+```bash
+make train ARGS="--epochs 20 --early-stopping-patience 4 --early-stopping-min-delta 0.001 --early-stopping-metric balanced_acc"
+```
+
+Patience in this project means:
+- After each epoch, we compare the chosen `--early-stopping-metric` against the best so far.
+- An epoch only counts as an improvement if `metric > best_metric + min_delta`.
+- `patience=N` allows up to `N` consecutive non-improving epochs before stopping.
+- `--early-stopping-patience 0` disables early stopping.
+
+### Classify (inference)
+
+Default checkpoint path is `artifacts/best_real_fake.pt`. Older ResNet-18-only runs may use `artifacts/best_real_fake_resnet18.pt`.
 
 ### Command Line Interface
 
@@ -170,7 +211,7 @@ Common day-to-day workflow:
 cd model
 source .venv/bin/activate
 python -m pip install -r requirements.txt
-python train_entry.py --epochs 8 --batch-size 32 --num-workers 2 --out-dir artifacts
+make train ARGS="--epochs 8 --batch-size 32 --num-workers 2 --out-dir artifacts"
 ```
 
 When done:
@@ -182,7 +223,7 @@ deactivate
 Suggested iteration path:
 - Start with a short sanity run (`--epochs 1`) to validate environment + dataset access.
 - Tune throughput first (`--num-workers`, `--batch-size`) before model changes.
-- Keep outputs under `artifacts/` and compare `train_metrics.json` across runs.
+- Keep outputs under `artifacts/` and compare archived `train_metrics_*.json` files across runs (`train_metrics.json` is only the most recent run).
 
 ## Extending the Project
 

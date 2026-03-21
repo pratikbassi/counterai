@@ -10,7 +10,7 @@ from pathlib import Path
 import torch
 from PIL import Image
 
-from train_model import create_resnet18_classifier
+from train_model import create_classifier
 from train_transforms import create_transforms
 
 
@@ -20,8 +20,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--checkpoint",
         type=str,
-        default=str(Path(__file__).parent / "artifacts" / "best_real_fake_resnet18.pt"),
-        help="Path to a trained checkpoint (.pt).",
+        default=str(Path(__file__).parent / "artifacts" / "best_real_fake.pt"),
+        help="Path to a trained checkpoint (.pt). Legacy resnet18 runs also mirror best_real_fake_resnet18.pt.",
     )
     parser.add_argument(
         "--device",
@@ -59,12 +59,19 @@ def main() -> None:
     else:
         device = torch.device("cpu")
 
-    checkpoint = torch.load(ckpt_path, map_location=device)
+    try:
+        checkpoint = torch.load(ckpt_path, map_location=device, weights_only=False)
+    except TypeError:
+        checkpoint = torch.load(ckpt_path, map_location=device)
     class_names = checkpoint.get("class_names", ["Real", "Fake"])
     num_classes = len(class_names)
     image_size = int(checkpoint.get("image_size", 224))
+    architecture = checkpoint.get("architecture", "resnet18")
+    temperature = float(checkpoint.get("temperature", 1.0))
 
-    model = create_resnet18_classifier(num_classes=num_classes, device=device)
+    model, _ = create_classifier(
+        architecture, num_classes=num_classes, device=device
+    )
     model.load_state_dict(checkpoint["state_dict"])
     model.eval()
 
@@ -75,7 +82,7 @@ def main() -> None:
 
     with torch.no_grad():
         with torch.amp.autocast("cuda", enabled=(device.type == "cuda")):
-            logits = model(x)
+            logits = model(x) / temperature
             probs = torch.softmax(logits, dim=1)[0]
 
     pred_idx = int(probs.argmax().item())
@@ -83,6 +90,7 @@ def main() -> None:
 
     print(f"Image: {image_path}")
     print(f"Checkpoint: {ckpt_path}")
+    print(f"Architecture: {architecture} | temperature T={temperature:.4f}")
     print(f"Predicted: {pred_label} (p={float(probs[pred_idx]):.4f})")
     print("Probabilities:")
     for i, name in enumerate(class_names):
