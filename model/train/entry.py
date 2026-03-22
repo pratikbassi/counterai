@@ -14,7 +14,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-import kagglehub
 import torch
 from PIL import Image
 from torch import nn
@@ -23,11 +22,12 @@ from torch.optim.lr_scheduler import CosineAnnealingLR, ReduceLROnPlateau
 from torch.utils.data import DataLoader, WeightedRandomSampler
 
 from .calibration import fit_temperature_scaling
-from .data import RealFakePathsDataset, build_train_val_datasets
-from .ema import ModelEMA, ema_eval_scope
+from .data import build_train_val_datasets, iter_dataset_labels, train_dataset_label_counts
+from .ema import ModelEMA, maybe_ema_scope
 from .loop import evaluate_confusion_matrix, evaluate_metrics, train_one_epoch
 from .model import apply_train_stage, create_classifier
 from .transforms import create_transforms
+from .utils import load_checkpoint, print_confusion_matrix
 
 
 def _write_train_metrics(
@@ -123,37 +123,10 @@ def _scheduler_step(scheduler: Any, cfg: TrainConfig, monitor_value: float) -> N
 def _balanced_sample_weights(train_ds: torch.utils.data.Dataset, num_classes: int) -> torch.Tensor:
     """Per-sample weights inversing class frequency (for WeightedRandomSampler)."""
 
-    counts = torch.zeros(num_classes, dtype=torch.float64)
-    if isinstance(train_ds, RealFakePathsDataset):
-        for _path, y in train_ds.items:
-            counts[int(y)] += 1.0
-    elif isinstance(train_ds, torch.utils.data.Subset):
-        base = train_ds.dataset
-        targets = getattr(base, "targets", None)
-        if targets is None:
-            raise RuntimeError("Balanced sampler requires .targets on the base dataset.")
-        for idx in train_ds.indices:
-            counts[int(targets[idx])] += 1.0
-    else:
-        targets = getattr(train_ds, "targets", None)
-        if targets is None:
-            raise RuntimeError("Balanced sampler requires .targets on the dataset.")
-        for t in targets:
-            counts[int(t)] += 1.0
-
+    counts = train_dataset_label_counts(train_ds, num_classes).to(torch.float64)
     inv = 1.0 / counts.clamp(min=1.0)
-    weights: list[float] = []
-    if isinstance(train_ds, RealFakePathsDataset):
-        for _path, y in train_ds.items:
-            weights.append(float(inv[int(y)]))
-    elif isinstance(train_ds, torch.utils.data.Subset):
-        targets = train_ds.dataset.targets
-        for idx in train_ds.indices:
-            weights.append(float(inv[int(targets[idx])]))
-    else:
-        for t in train_ds.targets:
-            weights.append(float(inv[int(t)]))
-    return torch.tensor(weights, dtype=torch.double)
+    labels = iter_dataset_labels(train_ds)
+    return torch.tensor([float(inv[y]) for y in labels], dtype=torch.double)
 
 
 @dataclass
@@ -167,7 +140,6 @@ class TrainConfig:
     image_size: int = 224
     seed: int = 42
     out_dir: str = "artifacts"
-    dataset_slug: str = "antorbosuantu/asa-real-fake-dataset"
     head_epochs: int = 2
     backbone_lr: float = 1e-5
     scheduler: str = "cosine"
@@ -378,10 +350,59 @@ def parse_args() -> argparse.Namespace:
         help="Suppress PIL DecompressionBombWarning by allowing large images.",
     )
     parser.add_argument(
-        "--dataset-slug",
+        "--local-data-dir",
         type=str,
-        default="antorbosuantu/asa-real-fake-dataset",
-        help="KaggleHub dataset slug",
+        default="data",
+        help=(
+            "Directory with training data when running from `model/` "
+            "(default: `data`). "
+            "Expects train.csv, test.csv, train_data/, test_data/ by default "
+            "(override names with --csv-*)."
+        ),
+    )
+    parser.add_argument(
+        "--csv-train-image-dir",
+        type=str,
+        default="train_data",
+        help="Subfolder of --local-data-dir with training images (flat).",
+    )
+    parser.add_argument(
+        "--csv-val-image-dir",
+        type=str,
+        default="test_data",
+        help="Subfolder of --local-data-dir with validation/test images (flat).",
+    )
+    parser.add_argument(
+        "--csv-train-file",
+        type=str,
+        default="train.csv",
+        help="Training labels CSV filename inside --local-data-dir.",
+    )
+    parser.add_argument(
+        "--csv-val-file",
+        type=str,
+        default="test.csv",
+        help="Validation labels CSV filename inside --local-data-dir.",
+    )
+    parser.add_argument(
+        "--csv-image-column",
+        type=str,
+        default="",
+        help="CSV column for image filename (default: infer from header).",
+    )
+    parser.add_argument(
+        "--csv-label-column",
+        type=str,
+        default="",
+        help="CSV column for class label (default: infer from header).",
+    )
+    parser.add_argument(
+        "--no-verify-csv-paths",
+        action="store_true",
+        help=(
+            "Skip per-row filesystem checks when loading CSV + flat folders "
+            "(much faster for large CSVs; errors surface on first missing image in DataLoader)."
+        ),
     )
     return parser.parse_args()
 
@@ -405,7 +426,6 @@ def _config_from_args(args: argparse.Namespace) -> TrainConfig:
         image_size=args.image_size,
         seed=args.seed,
         out_dir=args.out_dir,
-        dataset_slug=args.dataset_slug,
         head_epochs=args.head_epochs,
         backbone_lr=args.backbone_lr,
         scheduler=args.scheduler,
@@ -465,6 +485,13 @@ def run_one_training_run(
         val_split=cfg.val_split,
         seed=cfg.seed,
         stratified_val_split=cfg.stratified_val_split,
+        csv_train_image_dir=args.csv_train_image_dir,
+        csv_val_image_dir=args.csv_val_image_dir,
+        csv_train_file=args.csv_train_file,
+        csv_val_file=args.csv_val_file,
+        csv_image_column=args.csv_image_column or None,
+        csv_label_column=args.csv_label_column or None,
+        verify_csv_paths=not args.no_verify_csv_paths,
     )
 
     train_ds = datasets_info["train_ds"]
@@ -484,6 +511,22 @@ def run_one_training_run(
         )
         print(f"Train dir: {data_loading.get('train_dir')}")
         print(f"Test dir: {data_loading.get('test_dir')}")
+    elif data_loading.get("mode") == "csv_flat_folders":
+        vs = data_loading.get("val_strategy", "labeled_val_csv")
+        print("Detected CSV + flat image folders.")
+        print(f"Train CSV: {data_loading.get('train_csv')}")
+        print(f"Train images: {data_loading.get('train_image_dir')}")
+        if data_loading.get("val_csv"):
+            print(f"Val CSV: {data_loading['val_csv']}")
+        if data_loading.get("val_image_dir"):
+            print(f"Val images: {data_loading['val_image_dir']}")
+        print(f"Val strategy: {vs}")
+        if vs == "train_holdout_stratified":
+            detail = f"holdout fraction {data_loading.get('val_split')!r}"
+            n_unl = data_loading.get("unlabeled_test_paths_count")
+            if n_unl is not None:
+                detail += f"; unlabeled test list: {n_unl} paths"
+            print(f"  ({detail})")
     else:
         print(f"Using ImageFolder root: {imagefolder_root}")
         print(f"Val split mode: {data_loading.get('mode')}")
@@ -598,20 +641,8 @@ def run_one_training_run(
             ema=ema,
         )
 
-        def _eval_for_monitor() -> dict:
-            if ema is not None:
-                with ema_eval_scope(model, ema):
-                    return evaluate_metrics(
-                        model=model,
-                        loader=val_loader,
-                        criterion=criterion,
-                        device=device,
-                        num_classes=num_classes,
-                        batch_size=cfg.batch_size,
-                        amp_enabled=amp_enabled,
-                        log_every=args.log_every,
-                    )
-            return evaluate_metrics(
+        with maybe_ema_scope(model, ema):
+            val_m = evaluate_metrics(
                 model=model,
                 loader=val_loader,
                 criterion=criterion,
@@ -621,8 +652,6 @@ def run_one_training_run(
                 amp_enabled=amp_enabled,
                 log_every=args.log_every,
             )
-
-        val_m = _eval_for_monitor()
         val_loss = val_m["loss"]
         val_acc = val_m["acc"]
         val_balanced = val_m["balanced_acc"]
@@ -656,36 +685,25 @@ def run_one_training_run(
             best_epoch = epoch
             epochs_since_improvement = 0
 
-            def _save_checkpoint(path: Path) -> None:
-                if ema is not None:
-                    with ema_eval_scope(model, ema):
-                        payload_sd = {
-                            k: v.detach().cpu()
-                            for k, v in model.state_dict().items()
-                        }
-                else:
-                    payload_sd = {
-                        k: v.detach().cpu() for k, v in model.state_dict().items()
-                    }
-                torch.save(
-                    {
-                        "state_dict": payload_sd,
-                        "class_names": class_names,
-                        "image_size": cfg.image_size,
-                        "architecture": arch,
-                        "val_acc": val_m["acc"],
-                        "val_balanced_acc": val_m["balanced_acc"],
-                        "val_macro_f1": val_m["macro_f1"],
-                        "monitor_metric": cfg.early_stopping_metric,
-                        "monitor_value": best_metric,
-                        "temperature": 1.0,
-                    },
-                    path,
-                )
-
-            _save_checkpoint(best_model_path)
+            with maybe_ema_scope(model, ema):
+                payload_sd = {
+                    k: v.detach().cpu() for k, v in model.state_dict().items()
+                }
+            ckpt_payload = {
+                "state_dict": payload_sd,
+                "class_names": class_names,
+                "image_size": cfg.image_size,
+                "architecture": arch,
+                "val_acc": val_m["acc"],
+                "val_balanced_acc": val_m["balanced_acc"],
+                "val_macro_f1": val_m["macro_f1"],
+                "monitor_metric": cfg.early_stopping_metric,
+                "monitor_value": best_metric,
+                "temperature": 1.0,
+            }
+            torch.save(ckpt_payload, best_model_path)
             if arch == "resnet18":
-                _save_checkpoint(legacy_resnet_path)
+                torch.save(ckpt_payload, legacy_resnet_path)
             print(f"Saved new best model -> {best_model_path} (monitor={best_metric:.4f})")
         else:
             epochs_since_improvement += 1
@@ -740,26 +758,11 @@ def run_one_training_run(
     )
     print("\nDetailed validation evaluation (best checkpoint):")
 
-    try:
-        checkpoint = torch.load(best_model_path, map_location=device, weights_only=False)
-    except TypeError:
-        checkpoint = torch.load(best_model_path, map_location=device)
+    checkpoint = load_checkpoint(best_model_path, device=device)
     model.load_state_dict(checkpoint["state_dict"])
 
-    def _detailed_eval() -> dict:
-        if ema is not None:
-            with ema_eval_scope(model, ema):
-                return evaluate_confusion_matrix(
-                    model=model,
-                    loader=val_loader,
-                    criterion=criterion,
-                    device=device,
-                    num_classes=num_classes,
-                    class_names=class_names,
-                    batch_size=cfg.batch_size,
-                    amp_enabled=amp_enabled,
-                )
-        return evaluate_confusion_matrix(
+    with maybe_ema_scope(model, ema):
+        detailed = evaluate_confusion_matrix(
             model=model,
             loader=val_loader,
             criterion=criterion,
@@ -770,8 +773,6 @@ def run_one_training_run(
             amp_enabled=amp_enabled,
         )
 
-    detailed = _detailed_eval()
-
     print(f"Validation loss: {detailed['loss']:.4f}")
     print(f"Validation acc:  {detailed['acc']:.4f}")
     print(f"Balanced acc:    {detailed['balanced_acc']:.4f}")
@@ -781,11 +782,7 @@ def run_one_training_run(
         print(f"  {cls_name}: {acc:.4f}")
 
     print("Confusion matrix (rows=true, cols=pred):")
-    cm = detailed["confusion_matrix"]
-    header = " " * 10 + "  ".join([f"pred:{n}" for n in class_names])
-    print(header)
-    for i, row in enumerate(cm):
-        print(f"true:{class_names[i]} " + "  ".join(str(x) for x in row))
+    print_confusion_matrix(detailed["confusion_matrix"], class_names)
 
     temperature = float(checkpoint.get("temperature", 1.0))
     if cfg.fit_temperature:
@@ -845,9 +842,17 @@ def main() -> None:
 
     base_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    print(f"Downloading dataset from kagglehub: {base_cfg.dataset_slug}")
-    dataset_path = Path(kagglehub.dataset_download(base_cfg.dataset_slug))
-    print(f"Dataset downloaded to: {dataset_path}")
+    raw = args.local_data_dir.strip()
+    if not raw:
+        raise ValueError("--local-data-dir cannot be empty")
+    dataset_path = (
+        Path(raw).resolve() if Path(raw).is_absolute() else (Path.cwd() / raw).resolve()
+    )
+    if not dataset_path.is_dir():
+        raise FileNotFoundError(
+            f"--local-data-dir is not a directory: {dataset_path}"
+        )
+    print(f"Using local dataset directory: {dataset_path}")
 
     for run_seed in seeds:
         cfg = replace(base_cfg, seed=run_seed)

@@ -50,19 +50,18 @@ pip install Pillow>=11.0.0 opencv-python>=4.10.0 numpy>=2.1.0 requests>=2.32.0
 
 ### Train a real-vs-fake classifier
 
-This repo now includes a starter trainer using the Kaggle dataset:
+Training always reads from a **local directory** (no automatic Kaggle downloads). Default is **`data/`** when you run from `model/` (`--local-data-dir`).
 
-```python
-import kagglehub
-path = kagglehub.dataset_download("antorbosuantu/asa-real-fake-dataset")
-print(path)
-```
-
-Run training:
+**Layout:** put `train.csv`, `test.csv`, and flat folders `train_data/` and `test_data/` under **`model/data/`** (defaults; override with `--csv-*` flags). Paths in CSVs are usually **relative to that root** (e.g. `train_data/uuid.jpg`). If `test.csv` is **paths-only** (no label column), the trainer builds a **stratified validation holdout from `train.csv`** and only checks that unlabeled test paths exist for sanity; use **`--no-verify-csv-paths`** on large sets to skip per-row `stat` during startup (failures show up when an image is loaded). Optional **`source_labels.csv`** in the same folder for held-out eval (see **[docs/DATA_LAYOUT.md](docs/DATA_LAYOUT.md)** and **[docs/RESTORE_TEST_LABELS.md](docs/RESTORE_TEST_LABELS.md)**). The whole `data/` tree is gitignored.
 
 ```bash
+cd model
 make train
+# equivalent:
+make train ARGS="--local-data-dir data ..."
 ```
+
+To compare backbones systematically (`resnet18`, `resnet50`, `efficientnet_b0`, …), follow **[docs/MODEL_ABLATION_PLAN.md](docs/MODEL_ABLATION_PLAN.md)**.
 
 Optional arguments:
 
@@ -121,6 +120,29 @@ Patience in this project means:
 ### Classify (inference)
 
 Default checkpoint path is `artifacts/best_real_fake.pt`. Older ResNet-18-only runs may use `artifacts/best_real_fake_resnet18.pt`.
+
+### Evaluate on an external labeled dataset
+
+**CSV + flat folder** (same path rules as training): default eval for `source_labels.csv` next to `test_data/`:
+
+```bash
+cd model
+make eval-external EVAL_ARGS="--labeled-csv data/source_labels.csv --csv-root data --checkpoint artifacts/best_real_fake_20260321_184439_seed43.pt"
+```
+
+**ImageFolder:** unzip a benchmark and pass `--dataset-path`; folder names are mapped to class `0`/`1` (see `--class-map` if needed).
+
+```bash
+make eval-external EVAL_ARGS="--dataset-path data/other_benchmark --checkpoint artifacts/best_real_fake_20260321_184439_seed43.pt"
+```
+
+Metrics JSON is written under `artifacts/eval_external_*.json` by default.
+
+If folder names are ambiguous, pass explicit maps (repeat `--class-map`):
+
+```bash
+make eval-external EVAL_ARGS="--dataset-path /path/to/extracted --checkpoint artifacts/best_real_fake_20260321_184439_seed43.pt --class-map Human:0 --class-map AI:1"
+```
 
 ### Command Line Interface
 

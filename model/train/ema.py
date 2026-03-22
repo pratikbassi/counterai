@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from contextlib import contextmanager
-from typing import Any, Iterator
+from contextlib import contextmanager, nullcontext
+from typing import Any, Iterator, Optional
 
 import torch
 from torch import nn
@@ -68,3 +68,10 @@ def ema_eval_scope(model: nn.Module, ema: ModelEMA) -> Iterator[None]:
         for name, param in model.named_parameters():
             if name in backup:
                 param.data.copy_(backup[name])
+
+
+def maybe_ema_scope(model: nn.Module, ema: Optional[ModelEMA]):
+    """ema_eval_scope when EMA is active, no-op context otherwise."""
+    if ema is not None:
+        return ema_eval_scope(model, ema)
+    return nullcontext()

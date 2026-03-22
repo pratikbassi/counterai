@@ -13,3 +13,6 @@ artifacts/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+
+# Local datasets (flat `data/` + optional extra folders; not tracked)
+data/

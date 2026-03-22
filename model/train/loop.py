@@ -138,48 +138,6 @@ def evaluate_metrics(
 
 
 @torch.no_grad()
-def evaluate(
-    *,
-    model: nn.Module,
-    loader: DataLoader,
-    criterion: nn.Module,
-    device: torch.device,
-    batch_size: int,
-    amp_enabled: bool,
-    log_every: int,
-) -> tuple[float, float]:
-    model.eval()
-    total_loss = 0.0
-    total_acc = 0.0
-    steps = 0
-
-    logger = StepLogger(prefix="val", batch_size=batch_size, log_every=log_every)
-
-    with torch.inference_mode():
-        for batch_idx, (images, labels) in enumerate(loader, start=1):
-            images = images.to(device, non_blocking=True)
-            labels = labels.to(device, non_blocking=True)
-
-            with torch.amp.autocast("cuda", enabled=amp_enabled):
-                logits = model(images)
-                loss = criterion(logits, labels)
-
-            batch_acc = accuracy(logits, labels)
-            total_loss += loss.item()
-            total_acc += batch_acc
-            steps += 1
-
-            logger.maybe_log(
-                batch_idx=batch_idx,
-                num_batches=len(loader),
-                loss=loss.item(),
-                acc=batch_acc,
-            )
-
-    return total_loss / max(steps, 1), total_acc / max(steps, 1)
-
-
-@torch.no_grad()
 def evaluate_confusion_matrix(
     *,
     model: nn.Module,

@@ -13,6 +13,3 @@ numpy>=2.1.0
 # HTTP requests
 requests>=2.32.0
 
-# Dataset download helper
-kagglehub>=0.3.8
-

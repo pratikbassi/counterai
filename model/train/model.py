@@ -87,30 +87,3 @@ def apply_train_stage(
                 p.requires_grad = True
     else:
         raise ValueError(f"Unsupported architecture: {architecture!r}")
-
-
-# Backwards compatibility for thin wrappers / old scripts.
-def create_resnet18_classifier(*, num_classes: int, device: torch.device) -> nn.Module:
-    model, _ = create_classifier("resnet18", num_classes=num_classes, device=device)
-    return model
-
-
-def set_trainable_params(
-    model: nn.Module,
-    *,
-    train_fc: bool,
-    train_layer4: bool,
-) -> None:
-    """
-    Legacy ResNet-only helper (layer4 + fc). Used by older scripts; assumes a ResNet-like model.
-    """
-
-    if not hasattr(model, "layer4"):
-        raise TypeError(
-            "set_trainable_params expects a ResNet-like model with .layer4; "
-            "use apply_train_stage for EfficientNet."
-        )
-    if train_fc and not train_layer4:
-        apply_train_stage(model, "resnet18", stage="head", unfreeze_layer3=False)
-    else:
-        apply_train_stage(model, "resnet18", stage="full", unfreeze_layer3=False)
