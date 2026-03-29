@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Downloaded assets (when implemented)
+downloads/
+
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

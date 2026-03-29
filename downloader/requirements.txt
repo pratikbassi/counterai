@@ -1,0 +1,2 @@
+# Minimal deps for future HTTP/image handling (placeholder uses stdlib only).
+requests>=2.32.0
