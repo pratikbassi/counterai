@@ -1,2 +1,3 @@
 # Minimal deps for future HTTP/image handling (placeholder uses stdlib only).
+python-dotenv>=1.0.0
 requests>=2.32.0

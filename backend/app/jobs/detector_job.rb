@@ -20,28 +20,42 @@ class DetectorJob < ApplicationJob
       return
     end
 
-    Rails.logger.info "DetectorJob: Classifying #{file_address} (hash=#{hash_value})"
+    record.with_lock do
+      record.reload
+      unless record.unknown?
+        Rails.logger.info "DetectorJob: skip duplicate/stale job hash=#{hash_value} status=#{record.ai_status}"
+        return
+      end
 
-    stdout, stderr, status = Open3.capture3(
-      PYTHON_BIN, CLASSIFY_SCRIPT, file_address, "--json", "--device", "cpu"
-    )
+      Rails.logger.info "DetectorJob: Classifying #{file_address} (hash=#{hash_value})"
 
-    unless status.success?
-      Rails.logger.error "DetectorJob: classify.py failed (exit #{status.exitstatus}): #{stderr}"
-      return
+      stdout, stderr, status = Open3.capture3(
+        PYTHON_BIN, CLASSIFY_SCRIPT, file_address, "--json", "--device", "cpu"
+      )
+
+      unless status.success?
+        Rails.logger.error "DetectorJob: classify.py failed (exit #{status.exitstatus}): #{stderr}"
+        return
+      end
+
+      result = begin
+        JSON.parse(stdout)
+      rescue JSON::ParserError => e
+        Rails.logger.error "DetectorJob: invalid JSON from classify.py: #{e.message}"
+        nil
+      end
+      return if result.nil?
+
+      if result["error"]
+        Rails.logger.error "DetectorJob: classify.py returned error: #{result['error']}"
+        return
+      end
+
+      new_status = ai_status_from_label(result["label"])
+
+      record.update!(ai_status: new_status)
+      Rails.logger.info "DetectorJob: #{hash_value} → #{new_status} (#{result['label']} p=#{result['confidence']})"
     end
-
-    result = JSON.parse(stdout)
-
-    if result["error"]
-      Rails.logger.error "DetectorJob: classify.py returned error: #{result['error']}"
-      return
-    end
-
-    new_status = ai_status_from_label(result["label"])
-
-    record.update!(ai_status: new_status)
-    Rails.logger.info "DetectorJob: #{hash_value} → #{new_status} (#{result['label']} p=#{result['confidence']})"
   end
 
   private

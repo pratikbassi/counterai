@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """
-Entry point for URL → image download (placeholder). Same as downloader_entry.py;
-kept as a named script for backend jobs and shell use.
+Entry point for URL → image download. Used by DownloaderJob and make run.
 
   python download_url.py 'https://example.com/image.jpg'
-  python download_url.py 'https://example.com/image.jpg' --json
+  python download_url.py 'https://www.instagram.com/p/SHORTCODE/' --json
 """
 
 from downloader.entry import main

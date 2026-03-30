@@ -1,0 +1,4 @@
+{
+  "hosts": ["instagram.com", "instagr.am"],
+  "post_path_regex": "^/(?:p|reel|tv)/[A-Za-z0-9_-]+/?$"
+}
