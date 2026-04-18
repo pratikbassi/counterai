@@ -53,29 +53,8 @@ RUN bundle exec bootsnap precompile -j 1 app/ lib/
 # Precompiling assets for production without requiring secret RAILS_MASTER_KEY
 RUN SECRET_KEY_BASE_DUMMY=1 ./bin/rails assets:precompile
 
-# Fly.io + LiteFS: root + FUSE + litefs mount; app runs via litefs.yml exec as `rails`.
-# Build with: docker build --target fly …   (Fly: [build] build-target = "fly")
-FROM base AS fly
-
-USER root
-
-RUN apt-get update -qq && \
-    apt-get install --no-install-recommends -y fuse3 ca-certificates && \
-    rm -rf /var/lib/apt/lists /var/cache/apt/archives
-
-COPY --from=docker.io/flyio/litefs:0.5 /usr/local/bin/litefs /usr/local/bin/litefs
-COPY litefs.yml /etc/litefs.yml
-
-RUN groupadd --system --gid 1000 rails && \
-    useradd rails --uid 1000 --gid 1000 --create-home --shell /bin/bash
-
-COPY --chown=rails:rails --from=build "${BUNDLE_PATH}" "${BUNDLE_PATH}"
-COPY --chown=rails:rails --from=build /rails /rails
-
-ENTRYPOINT ["/usr/local/bin/litefs", "mount"]
-
-# Default production image (non-root; Kamal / generic Docker)
-FROM base AS production
+# Final stage for app image
+FROM base
 
 # Run and own only the runtime files as a non-root user for security
 RUN groupadd --system --gid 1000 rails && \
