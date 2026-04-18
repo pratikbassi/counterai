@@ -8,15 +8,22 @@ primary_region = 'yyz'
 console_command = '/rails/bin/rails console'
 
 [build]
+  build-target = "fly"
 
 [env]
-  DATABASE_URL = 'sqlite3:///data/production.sqlite3'
+  # All SQLite DB files must live under /litefs (LiteFS allows only the mount root).
+  DATABASE_URL = 'sqlite3:///litefs/production.sqlite3'
+  PRIMARY_REGION = 'yyz'
   PORT = '8080'
   SOLID_QUEUE_IN_PUMA = 'true'
 
 [[mounts]]
+  source = 'litefs'
+  destination = '/var/lib/litefs'
+
+[[mounts]]
   source = 'data'
-  destination = '/data'
+  destination = '/rails/storage'
   auto_extend_size_threshold = 80
   auto_extend_size_increment = '1GB'
   auto_extend_size_limit = '10GB'

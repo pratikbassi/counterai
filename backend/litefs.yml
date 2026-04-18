@@ -1,0 +1,36 @@
+# LiteFS on Fly.io: SQLite lives on the FUSE mount (flat files only — no subdirs).
+# See https://fly.io/docs/litefs/getting-started/
+fuse:
+  dir: "/litefs"
+
+# Persistent LiteFS internal state (mount a Fly volume here).
+data:
+  dir: "/var/lib/litefs"
+
+exit-on-error: false
+
+# Fly HTTP checks hit :8080; Rails+Thruster listens on :8081 behind the proxy.
+proxy:
+  addr: ":8080"
+  target: "localhost:8081"
+  # TXID tracking DB — must match the primary production SQLite filename on /litefs.
+  db: "production.sqlite3"
+  passthrough:
+    - "*.ico"
+    - "*.png"
+
+exec:
+  # Migrations / schema load only on nodes that can become primary (see lease.candidate).
+  - cmd: 'su -s /bin/bash rails -c "cd /rails && ./bin/rails db:prepare"'
+    if-candidate: true
+  - cmd: 'su -s /bin/bash rails -c "cd /rails && PORT=8081 exec ./bin/thrust ./bin/rails server"'
+
+lease:
+  type: "consul"
+  advertise-url: "http://${FLY_ALLOC_ID}.vm.${FLY_APP_NAME}.internal:20202"
+  candidate: ${FLY_REGION == PRIMARY_REGION}
+  promote: true
+
+  consul:
+    url: "${FLY_CONSUL_URL}"
+    key: "litefs/${FLY_APP_NAME}"
