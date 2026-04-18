@@ -16,14 +16,13 @@ console_command = '/rails/bin/rails console'
   PRIMARY_REGION = 'yyz'
   PORT = '8080'
   SOLID_QUEUE_IN_PUMA = 'true'
+  # One Fly volume: LiteFS uses …/litefs; Active Storage uses …/rails-storage (see litefs.yml + storage.yml).
+  ACTIVE_STORAGE_ROOT = '/mnt/persist/rails-storage'
 
-[[mounts]]
-  source = 'litefs'
-  destination = '/var/lib/litefs'
-
+# Smaller Fly Machines allow only one volume per machine — use subdirs for LiteFS vs uploads.
 [[mounts]]
   source = 'data'
-  destination = '/rails/storage'
+  destination = '/mnt/persist'
   auto_extend_size_threshold = 80
   auto_extend_size_increment = '1GB'
   auto_extend_size_limit = '10GB'

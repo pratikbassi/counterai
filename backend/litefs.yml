@@ -3,9 +3,9 @@
 fuse:
   dir: "/litefs"
 
-# Persistent LiteFS internal state (mount a Fly volume here).
+# Persistent LiteFS internal state. On Fly we use a subdir of the single app volume (see fly.toml).
 data:
-  dir: "/var/lib/litefs"
+  dir: "/mnt/persist/litefs"
 
 exit-on-error: false
 
