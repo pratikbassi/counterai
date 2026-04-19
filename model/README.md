@@ -75,7 +75,7 @@ make train
 make train ARGS="--local-data-dir data ..."
 ```
 
-To compare backbones systematically (`resnet18`, `resnet50`, `efficientnet_b0`, …), follow **[docs/MODEL_ABLATION_PLAN.md](docs/MODEL_ABLATION_PLAN.md)**.
+To compare backbones systematically (`resnet18`, `resnet50`, `efficientnet_b0`, `convnext_tiny`, `efficientnet_v2_s`, `vit_b_16`), follow **[docs/MODEL_ABLATION_PLAN.md](docs/MODEL_ABLATION_PLAN.md)** (Phase G covers the new backbones on the ~140k AI-vs-human dataset). **Note:** `vit_b_16` requires `--image-size 224` (its positional embeddings are tied to 14x14 patches at patch-size 16).
 
 Optional arguments:
 
@@ -99,8 +99,8 @@ Outputs:
 
 Notes:
 - The script auto-discovers an `ImageFolder`-compatible dataset root (`class_a/`, `class_b/`, ...), or **Train/Test + Real/Fake** folders.
-- Default backbone is **ResNet-18**; use `--architecture resnet50` or `efficientnet_b0` for more capacity (slower / larger checkpoints).
-- Staged fine-tuning: classifier head warmup, then backbone + head (ResNet: `layer4` [+ optional `layer3`]; EfficientNet: `features` + classifier).
+- Default backbone is **ResNet-18**; use `--architecture {resnet50,efficientnet_b0,convnext_tiny,efficientnet_v2_s,vit_b_16}` for more capacity (slower / larger checkpoints). `vit_b_16` requires `--image-size 224`.
+- Staged fine-tuning: classifier head warmup, then backbone + head (ResNet: `layer4` [+ optional `layer3`]; EfficientNet/ConvNeXt: `features` + classifier; ViT: full encoder + heads + patch projection).
 - Transforms use ImageNet normalization; optional **RandAugment**, **JPEG recompression**, and **strong** ColorJitter.
 - **Stratified** train/val split for ImageFolder fallback (disable with `--no-stratified-val-split`).
 - **Class imbalance:** `--class-weights` (loss) and/or `--balance-sampler` (WeightedRandomSampler).

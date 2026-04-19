@@ -9,7 +9,7 @@ Living document: update the **Results log** tables after each run. Keep the **fi
 | Dataset | Phases A–E: ~4k train (ASA Real/Fake; local copy). **Phase F:** large **AI vs human** set under flat `model/data/` (CSV + flat folders; see Phase F). **Held-out eval:** `data/source_labels.csv` + `test_data/` (`docs/DATA_LAYOUT.md`, `docs/RESTORE_TEST_LABELS.md`). |
 | Hardware | ~12 GB VRAM; **throughput defaults** in this doc assume **many CPU cores** + spare RAM (`--num-workers 16`). If you OOM, lower `--batch-size` first. |
 | Trainer | `model/` → `make train ARGS="..."` |
-| Architectures in code today | `--architecture`: `resnet18`, `resnet50`, `efficientnet_b0` (`train/model.py`) |
+| Architectures in code today | `--architecture`: `resnet18`, `resnet50`, `efficientnet_b0`, `convnext_tiny`, `efficientnet_v2_s`, `vit_b_16` (`train/model.py`). Newer backbones pin `IMAGENET1K_V1` weights to keep ImageNet mean/std + 224-crop preprocessing (avoids ViT-B/16's `DEFAULT` SWAG variant which uses mean=0.5/std=0.5 + crop=384). |
 
 ## Goals
 
@@ -186,8 +186,8 @@ When new models are added to the trainer, add rows here **before** running.
 
 | # | Architecture | Status | Notes |
 |---|--------------|--------|--------|
-| D1 | e.g. `convnext_tiny` | Not in repo | Strong CNN baseline for fine-tuning |
-| D2 | e.g. `efficientnet_v2_s` | Not in repo | Good accuracy/size tradeoff |
+| D1 | `convnext_tiny` | **In repo** (~28M params); see Phase G | Strong CNN baseline for fine-tuning |
+| D2 | `efficientnet_v2_s` | **In repo** (~20M params); see Phase G | Good accuracy/size tradeoff |
 | D3 | e.g. `vit_b_16` | Not in repo | Watch batch size on 12 GB at 224+ |
 
 ---
@@ -255,6 +255,117 @@ make train ARGS="--no-verify-csv-paths --architecture efficientnet_b0 --image-si
 
 ---
 
+## Phase G — New backbones on Phase F dataset (large AI vs human)
+
+**Status:** Backbones added in code (`convnext_tiny`, `efficientnet_v2_s`, `vit_b_16`); rows below are **screening templates** — fill in `Val macro_f1` / `Val bal_acc` / metrics path after each run. The training data has grown to **~140k labeled rows** (balanced ~70k / ~70k) since Phase F2.
+
+### Goal
+
+Re-anchor the EfficientNet-B0 baseline on the larger dataset, screen each new backbone with a **single seed**, then promote the winner to a 3-seed run for variance estimation. Mirror Phase F's recipe (plateau scheduler + macro_f1 early stopping) so numbers can be stacked against F1/F2.
+
+### Fixed protocol (apply to every Phase G row unless the row overrides)
+
+| Setting | Value | Notes |
+|---------|-------|-------|
+| `--no-verify-csv-paths` | yes | Skip per-row `stat` on the ~140k CSV (~20s+ savings at startup) |
+| `--epochs` | 12 | |
+| `--head-epochs` | 2 | Staged head warmup |
+| `--lr` / `--backbone-lr` | `1e-4` / `1e-5` | |
+| `--scheduler plateau --plateau-patience 2` | yes | Same as F1/F2 |
+| `--early-stopping-metric macro_f1 --early-stopping-patience 4 --early-stopping-min-delta 0.001` | yes | |
+| `--num-workers` | 16 | Tune to CPU |
+| Seed | 42 | (`--extra-seeds 43,44` only for the G6 winner row) |
+| Augmentation | default | Keep parity with F |
+| AMP | on (CUDA default) | |
+
+**OOM playbook:** halve `--batch-size` for that row only and **record the actual batch** you used in the row.
+
+### Per-architecture screening (single seed = 42)
+
+| # | Architecture | Image | Batch | Notes / VRAM caveat |
+|---|--------------|-------|-------|---------------------|
+| G1 | `efficientnet_b0` | 288 | 80 | **Re-anchor** of Phase F2 winner on the new ~140k data; reference row for the others. |
+| G2 | `resnet50` | 224 | 96 | Sanity check on a CNN baseline at the new scale. |
+| G3 | `convnext_tiny` | 224 | 64 | ~28M params; halve batch if OOM. |
+| G4 | `efficientnet_v2_s` | 288 | 48 | Heavier than B0; halve to 32 if OOM. |
+| G5 | `vit_b_16` | **224 (fixed)** | 64 | Positional embeddings tied to 14x14 patches @ patch-size 16; do **not** sweep image size. ~86M params; halve to 32 (or smaller) if OOM. |
+
+### Results table (fill after each run)
+
+| # | Arch | Image | Batch | Val macro_f1 | Val bal_acc | Best epoch | val_loss | Per-class recall (0/1) | CM | Notes / `train_metrics_*.json` |
+|---|------|-------|-------|--------------|-------------|------------|----------|------------------------|----|--------------------------------|
+| G1 | efficientnet_b0 | 288 | 80 | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
+| G2 | resnet50 | 224 | 96 | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
+| G3 | convnext_tiny | 224 | 64 | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
+| G4 | efficientnet_v2_s | 288 | 48 | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
+| G5 | vit_b_16 | 224 | 64 | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
+
+### Phase G — copy-paste `make` commands (run from `model/`)
+
+**G1 — EfficientNet-B0 @ 288 (re-anchor)**
+
+```bash
+cd model
+make train ARGS="--no-verify-csv-paths --architecture efficientnet_b0 --image-size 288 --epochs 12 --batch-size 80 --num-workers 16 --head-epochs 2 --backbone-lr 1e-5 --lr 1e-4 --scheduler plateau --plateau-patience 2 --early-stopping-metric macro_f1 --early-stopping-patience 4 --early-stopping-min-delta 0.001"
+```
+
+**G2 — ResNet-50 @ 224**
+
+```bash
+cd model
+make train ARGS="--no-verify-csv-paths --architecture resnet50 --image-size 224 --epochs 12 --batch-size 96 --num-workers 16 --head-epochs 2 --backbone-lr 1e-5 --lr 1e-4 --scheduler plateau --plateau-patience 2 --early-stopping-metric macro_f1 --early-stopping-patience 4 --early-stopping-min-delta 0.001"
+```
+
+**G3 — ConvNeXt-Tiny @ 224**
+
+```bash
+cd model
+make train ARGS="--no-verify-csv-paths --architecture convnext_tiny --image-size 224 --epochs 12 --batch-size 64 --num-workers 16 --head-epochs 2 --backbone-lr 1e-5 --lr 1e-4 --scheduler plateau --plateau-patience 2 --early-stopping-metric macro_f1 --early-stopping-patience 4 --early-stopping-min-delta 0.001"
+```
+
+**G4 — EfficientNetV2-S @ 288**
+
+```bash
+cd model
+make train ARGS="--no-verify-csv-paths --architecture efficientnet_v2_s --image-size 288 --epochs 12 --batch-size 48 --num-workers 16 --head-epochs 2 --backbone-lr 1e-5 --lr 1e-4 --scheduler plateau --plateau-patience 2 --early-stopping-metric macro_f1 --early-stopping-patience 4 --early-stopping-min-delta 0.001"
+```
+
+**G5 — ViT-B/16 @ 224 (fixed)**
+
+```bash
+cd model
+make train ARGS="--no-verify-csv-paths --architecture vit_b_16 --image-size 224 --epochs 12 --batch-size 64 --num-workers 16 --head-epochs 2 --backbone-lr 1e-5 --lr 1e-4 --scheduler plateau --plateau-patience 2 --early-stopping-metric macro_f1 --early-stopping-patience 4 --early-stopping-min-delta 0.001"
+```
+
+### G6 — Multi-seed run on the G1–G5 winner
+
+After picking the row with the best `Val macro_f1` from G1–G5, append `--extra-seeds 43,44` to that row's command (and substitute the winning architecture / image / batch). Example assuming G3 wins:
+
+```bash
+cd model
+make train ARGS="--no-verify-csv-paths --architecture convnext_tiny --image-size 224 --epochs 12 --batch-size 64 --num-workers 16 --head-epochs 2 --backbone-lr 1e-5 --lr 1e-4 --scheduler plateau --plateau-patience 2 --early-stopping-metric macro_f1 --early-stopping-patience 4 --early-stopping-min-delta 0.001 --extra-seeds 43,44"
+```
+
+| # | Config summary | Seeds | Mean macro_f1 | Spread | Notes |
+|---|----------------|-------|---------------|--------|-------|
+| G6 | _winner from G1–G5_ | `42,43,44` | _TBD_ | _TBD_ | Compare against Phase F2 mean (0.9890) on the same data layout. |
+
+### After Phase G — suggested next steps
+
+1. **Promote the winning checkpoint** — copy/keep `artifacts/best_real_fake_<stamp>_seed<best>.pt` and update `DETECTOR_JOB_TODO.md` (item 1: configurable checkpoint path) to point production to it.
+2. **External / held-out labeled benchmark** — `make eval-external EVAL_ARGS="--labeled-csv data/source_labels.csv --csv-root data --checkpoint artifacts/best_real_fake_<stamp>_seed<best>.pt"`. Expect lower macro-F1 than the holdout — that gap is the domain-shift signal, not a regression.
+3. **Calibration (optional)** — re-run the winner with `--fit-temperature` (Phase C5 style) if downstream code wants calibrated probabilities.
+4. **Image-size sweep on the winner** — only if the winner is **not** ViT (ViT is locked at 224); try `--image-size 320` if VRAM permits.
+
+### Performance and scaling tradeoffs (Phase G)
+
+- **Single-seed screening (G1–G5) before multi-seed (G6)** is roughly 5x faster than naive "3 seeds for everyone"; only the winner pays the multi-seed cost.
+- **Pinned `IMAGENET1K_V1` weights** for the new backbones (rather than `DEFAULT`) keep the existing transform pipeline (ImageNet mean/std @ 224 crop) usable. Tradeoff: leaves SWAG-pretrained ViT performance on the table; the alternative (a second 384-crop transform path) would have inflated training time on ~140k images.
+- **Fixed image size per arch** (no per-arch resolution sweep) avoids combinatorial blowup. Resolution sweeps are reserved for the Phase G winner.
+- **Subprocess-per-image inference is unchanged** — `classify.py` reads the `architecture` field from the checkpoint, so any G winner drops in via `artifacts/best_real_fake.pt` and `DetectorJob` keeps working without code changes.
+
+---
+
 ## Decision rules
 
 1. **Primary:** best **macro_f1** or **balanced_acc** (whichever you fixed in Phase A) on the **same validation protocol** — not raw accuracy alone if classes skew.
@@ -289,3 +400,4 @@ make train ARGS="--no-verify-csv-paths --architecture efficientnet_b0 --image-si
 | 2026-03-21 | — | Removed Kaggle download tooling (`kagglehub`, wget script); training default `data/`; manual drops under `data/` |
 | 2026-03-22 | — | Flat `data/` (no `training/`/`testing/` subdirs, no symlinks); eval via `--labeled-csv` + `--csv-root`; removed `build_v2_labeled_imagefolder.py` / `make rebuild-testing-v2` |
 | 2026-03-22 | — | Renamed default val image dir `test_data_v2` → `test_data` (CLI defaults + docs; rewrite CSV paths + folder on disk) |
+| 2026-04-19 | — | Added `convnext_tiny`, `efficientnet_v2_s`, `vit_b_16` to `train/model.py` (pinned `IMAGENET1K_V1` weights). `train.csv` grew from ~60k → ~140k labeled rows (balanced). Added Phase G (re-anchor + 3 new backbones screened single-seed, winner promoted to 3 seeds). Updated Phase D status table. |

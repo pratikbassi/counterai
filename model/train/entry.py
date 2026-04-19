@@ -78,7 +78,7 @@ def _build_optimizer(
         )
         param_groups.append({"params": model.fc.parameters(), "lr": cfg.lr})
         return AdamW(param_groups, weight_decay=cfg.weight_decay)
-    if arch == "efficientnet_b0":
+    if arch in ("efficientnet_b0", "efficientnet_v2_s", "convnext_tiny"):
         if stage == "head":
             return AdamW(
                 model.classifier.parameters(),
@@ -89,6 +89,23 @@ def _build_optimizer(
             [
                 {"params": model.features.parameters(), "lr": cfg.backbone_lr},
                 {"params": model.classifier.parameters(), "lr": cfg.lr},
+            ],
+            weight_decay=cfg.weight_decay,
+        )
+    if arch == "vit_b_16":
+        if stage == "head":
+            return AdamW(
+                model.heads.parameters(),
+                lr=cfg.lr,
+                weight_decay=cfg.weight_decay,
+            )
+        head_params = list(model.heads.parameters())
+        head_ids = {id(p) for p in head_params}
+        backbone_params = [p for p in model.parameters() if id(p) not in head_ids]
+        return AdamW(
+            [
+                {"params": backbone_params, "lr": cfg.backbone_lr},
+                {"params": head_params, "lr": cfg.lr},
             ],
             weight_decay=cfg.weight_decay,
         )
@@ -188,7 +205,12 @@ def parse_args() -> argparse.Namespace:
         "--architecture",
         type=str,
         default="resnet18",
-        help="Backbone: resnet18, resnet50, efficientnet_b0",
+        help=(
+            "Backbone: resnet18, resnet50, efficientnet_b0, "
+            "convnext_tiny, efficientnet_v2_s, vit_b_16. "
+            "Note: vit_b_16 requires --image-size 224 (positional embeddings "
+            "are tied to 14x14 patches at patch-size 16)."
+        ),
     )
     parser.add_argument(
         "--unfreeze-layer3",
@@ -616,15 +638,16 @@ def run_one_training_run(
             )
             remaining_epochs = max(cfg.epochs - cfg.head_epochs, 1)
             scheduler = _make_scheduler(optimizer, cfg, epochs_this_stage=remaining_epochs)
-            detail = (
-                f"layer3+layer4+fc (backbone_lr={cfg.backbone_lr})"
-                if cfg.unfreeze_layer3 and arch in ("resnet18", "resnet50")
-                else (
-                    f"layer4+fc (backbone_lr={cfg.backbone_lr})"
-                    if arch in ("resnet18", "resnet50")
-                    else f"features+classifier (backbone_lr={cfg.backbone_lr})"
+            if arch in ("resnet18", "resnet50"):
+                detail = (
+                    f"layer3+layer4+fc (backbone_lr={cfg.backbone_lr})"
+                    if cfg.unfreeze_layer3
+                    else f"layer4+fc (backbone_lr={cfg.backbone_lr})"
                 )
-            )
+            elif arch == "vit_b_16":
+                detail = f"encoder+heads (backbone_lr={cfg.backbone_lr})"
+            else:
+                detail = f"features+classifier (backbone_lr={cfg.backbone_lr})"
             print(f"Switched to fine-tuning stage: unfroze {detail}")
 
         start = time.time()
