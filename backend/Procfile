@@ -1,2 +1,6 @@
+# Slug root = this folder when using Heroku subdir buildpack with PROJECT_PATH=backend.
+# Format: https://devcenter.heroku.com/articles/procfile
 release: bundle exec rails db:prepare
-web: ./bin/thrust ./bin/rails server
+web: ./bin/thrust ./bin/rails server -b 0.0.0.0 -p $PORT
+# Optional: heroku ps:scale worker=1 — unset SOLID_QUEUE_IN_PUMA on web if you use a worker dyno.
+# worker: bundle exec bin/jobs start
