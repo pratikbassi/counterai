@@ -14,6 +14,7 @@ Architecture = Literal[
     "convnext_tiny",
     "efficientnet_v2_s",
     "vit_b_16",
+    "scratch_cnn_v1",
 ]
 
 
@@ -26,7 +27,7 @@ def create_classifier(
     architecture: str, *, num_classes: int, device: torch.device
 ) -> tuple[nn.Module, str]:
     """
-    Build a pretrained classifier head for Real-vs-Fake (or general) num_classes.
+    Build a classifier model for Real-vs-Fake (or general) num_classes.
 
     Returns (model, normalized_architecture_name).
 
@@ -35,6 +36,11 @@ def create_classifier(
     in alternate preprocessing (e.g. ViT-B/16 ``DEFAULT`` is the SWAG variant
     with mean=0.5/std=0.5 and crop=384), which would mismatch the ImageNet
     mean/std + 224-crop pipeline in ``train/transforms.py``.
+
+    ``scratch_cnn_v1`` is the from-scratch ablation arch (Phase H): a hand-
+    authored ResNet-style CNN built in :mod:`train.scratch_cnn` with random
+    init and **no** torchvision/ImageNet weights. See its module docstring
+    and ``docs/MODEL_ABLATION_PLAN.md`` Phase H for the protocol.
     """
 
     arch = architecture.strip().lower().replace("-", "_")
@@ -70,11 +76,18 @@ def create_classifier(
         model = models.vit_b_16(weights=weights)
         in_features = model.heads.head.in_features
         model.heads.head = nn.Linear(in_features, num_classes)
+    elif arch in ("scratch_cnn_v1", "scratchcnnv1", "scratch_cnn"):
+        arch = "scratch_cnn_v1"
+        # Local import keeps torchvision out of the scratch arch's dependency
+        # graph and makes the "no pretrained weights" boundary explicit.
+        from train.scratch_cnn import build_scratch_cnn_v1
+
+        model = build_scratch_cnn_v1(num_classes=num_classes)
     else:
         raise ValueError(
             f"Unknown architecture {architecture!r}. "
             "Use: resnet18, resnet50, efficientnet_b0, "
-            "convnext_tiny, efficientnet_v2_s, vit_b_16"
+            "convnext_tiny, efficientnet_v2_s, vit_b_16, scratch_cnn_v1"
         )
 
     model.to(device)
@@ -95,6 +108,12 @@ def apply_train_stage(
       EfficientNet-V2-S: head = classifier;      full = features + classifier
       ConvNeXt-Tiny:    head = classifier[2];    full = features + classifier
       ViT-B/16:         head = heads;            full = encoder + heads
+      scratch_cnn_v1:   head = full;             full = full
+
+    For ``scratch_cnn_v1`` there is no pretrained backbone to protect, so
+    "head warmup" is meaningless and both stages unfreeze every parameter.
+    The recommended recipe is ``--head-epochs 0`` so the head stage is
+    skipped entirely; we still handle it correctly if it's not.
     """
 
     freeze_all(model)
@@ -141,5 +160,12 @@ def apply_train_stage(
             # encoder, so iterating only model.encoder would leave them frozen.
             for p in model.parameters():
                 p.requires_grad = True
+    elif arch == "scratch_cnn_v1":
+        # Random init -> no pretrained backbone to protect; both stages train
+        # the full network. Pair with ``--head-epochs 0`` to skip the head
+        # stage entirely (otherwise the "head" stage just runs full training
+        # under the head LR, which is not what you want).
+        for p in model.parameters():
+            p.requires_grad = True
     else:
         raise ValueError(f"Unsupported architecture: {architecture!r}")

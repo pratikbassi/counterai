@@ -109,6 +109,24 @@ def _build_optimizer(
             ],
             weight_decay=cfg.weight_decay,
         )
+    if arch == "scratch_cnn_v1":
+        # Random-init network: a single uniform LR is correct. The pretrained
+        # head/backbone split would cripple training because the "backbone"
+        # here was just initialised, not pretrained. cfg.backbone_lr is
+        # intentionally ignored; warn the user if they passed a value that
+        # differs from cfg.lr so the discrepancy is visible in the run log.
+        if cfg.backbone_lr != cfg.lr:
+            warnings.warn(
+                f"--backbone-lr={cfg.backbone_lr} is ignored for "
+                f"scratch_cnn_v1 (random init); using --lr={cfg.lr} for the "
+                "whole model. Pass --backbone-lr equal to --lr to silence this.",
+                stacklevel=2,
+            )
+        return AdamW(
+            model.parameters(),
+            lr=cfg.lr,
+            weight_decay=cfg.weight_decay,
+        )
     raise ValueError(f"Unsupported architecture for optimizer: {architecture!r}")
 
 
@@ -207,9 +225,12 @@ def parse_args() -> argparse.Namespace:
         default="resnet18",
         help=(
             "Backbone: resnet18, resnet50, efficientnet_b0, "
-            "convnext_tiny, efficientnet_v2_s, vit_b_16. "
+            "convnext_tiny, efficientnet_v2_s, vit_b_16, scratch_cnn_v1. "
             "Note: vit_b_16 requires --image-size 224 (positional embeddings "
-            "are tied to 14x14 patches at patch-size 16)."
+            "are tied to 14x14 patches at patch-size 16). scratch_cnn_v1 is a "
+            "from-scratch hand-authored CNN with no pretrained weights "
+            "(Phase H ablation); pair it with --head-epochs 0 and --lr 1e-3 "
+            "(--backbone-lr is ignored)."
         ),
     )
     parser.add_argument(

@@ -7,10 +7,23 @@ from pathlib import Path
 from typing import Optional
 
 import torch
-from PIL import Image
+from PIL import Image, ImageFile, UnidentifiedImageError
 from torch.utils.data import Dataset
 from torchvision import datasets
 from torchvision import transforms
+
+# Resilience against partially-downloaded / clipped JPEG/PNG files in scraped
+# datasets: PIL would otherwise raise `OSError: image file is truncated` from a
+# single bad sample and kill multi-hour training jobs. With this flag PIL
+# returns the partially-decoded pixels instead of raising. Combined with the
+# try/except fallback in RealFakePathsDataset.__getitem__ below, a corrupt
+# image becomes (at worst) a single neutral-gray sample rather than a crash.
+ImageFile.LOAD_TRUNCATED_IMAGES = True
+
+# Tracked across the dataset module so we only log each bad path once per
+# worker process (DataLoader spawns one worker per --num-workers, each gets
+# its own copy of this set, which is acceptable noise).
+_BAD_IMAGE_PATHS_LOGGED: set[str] = set()
 
 IMAGE_EXTENSIONS = {
     ".jpg",
@@ -632,8 +645,25 @@ class RealFakePathsDataset(Dataset):
 
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, int]:
         path, label = self.items[idx]
-        img = Image.open(path).convert("RGB")
-        img_tensor = self.transform(img)
+        try:
+            img = Image.open(path).convert("RGB")
+            img_tensor = self.transform(img)
+        except (OSError, UnidentifiedImageError, ValueError) as e:
+            # Substitute a neutral 256x256 gray PIL image (transformed through
+            # the same pipeline) so the batch shape stays valid and the val
+            # sample count stays stable. Tradeoff: a bad val image becomes a
+            # near-zero-information sample rather than a crash; for ~140k
+            # images and a handful of corrupt files this is a tiny metric bias
+            # vs losing the entire training run.
+            path_str = str(path)
+            if path_str not in _BAD_IMAGE_PATHS_LOGGED:
+                _BAD_IMAGE_PATHS_LOGGED.add(path_str)
+                print(
+                    f"WARN: failed to decode {path_str} ({type(e).__name__}: {e}); "
+                    "substituting neutral gray image."
+                )
+            img = Image.new("RGB", (256, 256), color=(128, 128, 128))
+            img_tensor = self.transform(img)
         return img_tensor, label
 
 

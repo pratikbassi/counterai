@@ -9,7 +9,7 @@ Living document: update the **Results log** tables after each run. Keep the **fi
 | Dataset | Phases A–E: ~4k train (ASA Real/Fake; local copy). **Phase F:** large **AI vs human** set under flat `model/data/` (CSV + flat folders; see Phase F). **Held-out eval:** `data/source_labels.csv` + `test_data/` (`docs/DATA_LAYOUT.md`, `docs/RESTORE_TEST_LABELS.md`). |
 | Hardware | ~12 GB VRAM; **throughput defaults** in this doc assume **many CPU cores** + spare RAM (`--num-workers 16`). If you OOM, lower `--batch-size` first. |
 | Trainer | `model/` → `make train ARGS="..."` |
-| Architectures in code today | `--architecture`: `resnet18`, `resnet50`, `efficientnet_b0`, `convnext_tiny`, `efficientnet_v2_s`, `vit_b_16` (`train/model.py`). Newer backbones pin `IMAGENET1K_V1` weights to keep ImageNet mean/std + 224-crop preprocessing (avoids ViT-B/16's `DEFAULT` SWAG variant which uses mean=0.5/std=0.5 + crop=384). |
+| Architectures in code today | `--architecture`: `resnet18`, `resnet50`, `efficientnet_b0`, `convnext_tiny`, `efficientnet_v2_s`, `vit_b_16`, `scratch_cnn_v1` (`train/model.py`). Newer torchvision backbones pin `IMAGENET1K_V1` weights to keep ImageNet mean/std + 224-crop preprocessing (avoids ViT-B/16's `DEFAULT` SWAG variant which uses mean=0.5/std=0.5 + crop=384). `scratch_cnn_v1` is a hand-authored ResNet-style CNN (`train/scratch_cnn.py`, ~4.9M params) with **no pretrained weights** — used only for the Phase H ablation. |
 
 ## Goals
 
@@ -268,6 +268,7 @@ Re-anchor the EfficientNet-B0 baseline on the larger dataset, screen each new ba
 | Setting | Value | Notes |
 |---------|-------|-------|
 | `--no-verify-csv-paths` | yes | Skip per-row `stat` on the ~140k CSV (~20s+ savings at startup) |
+| `--disable-decompression-bomb-warning` | yes | The new dataset contains at least one image >89M pixels which triggers PIL's bomb warning every epoch. The flag silences it without affecting metrics. |
 | `--epochs` | 12 | |
 | `--head-epochs` | 2 | Staged head warmup |
 | `--lr` / `--backbone-lr` | `1e-4` / `1e-5` | |
@@ -279,6 +280,8 @@ Re-anchor the EfficientNet-B0 baseline on the larger dataset, screen each new ba
 | AMP | on (CUDA default) | |
 
 **OOM playbook:** halve `--batch-size` for that row only and **record the actual batch** you used in the row.
+
+**Bad-image resilience:** [model/train/data.py](../train/data.py) sets `ImageFile.LOAD_TRUNCATED_IMAGES = True` and `RealFakePathsDataset.__getitem__` catches `OSError` / `UnidentifiedImageError`, logs the bad path once per worker, and substitutes a 256x256 neutral-gray PIL image. A handful of corrupt files in the ~140k dataset will not kill the run; they will appear as `WARN: failed to decode ...` lines in the log.
 
 ### Per-architecture screening (single seed = 42)
 
@@ -294,7 +297,7 @@ Re-anchor the EfficientNet-B0 baseline on the larger dataset, screen each new ba
 
 | # | Arch | Image | Batch | Val macro_f1 | Val bal_acc | Best epoch | val_loss | Per-class recall (0/1) | CM | Notes / `train_metrics_*.json` |
 |---|------|-------|-------|--------------|-------------|------------|----------|------------------------|----|--------------------------------|
-| G1 | efficientnet_b0 | 288 | 80 | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
+| G1 | efficientnet_b0 | 288 | 80 | **0.9655** | **0.9655** | 11 | 0.0926 | 0.9672 / 0.9637 | [[13536, 459], [508, 13487]] | Stamp **20260419_011716**; 12/12 epochs ran; ep12 macro_f1=0.9660 (no improvement, patience 1/4); val_acc 0.9654; **−0.0235** vs Phase F2 mean (0.9890) — consistent with the new ~140k dataset being harder/noisier than the original ~60k, not a model regression. `artifacts/train_metrics_20260419_011716.json` |
 | G2 | resnet50 | 224 | 96 | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
 | G3 | convnext_tiny | 224 | 64 | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
 | G4 | efficientnet_v2_s | 288 | 48 | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
@@ -306,35 +309,35 @@ Re-anchor the EfficientNet-B0 baseline on the larger dataset, screen each new ba
 
 ```bash
 cd model
-make train ARGS="--no-verify-csv-paths --architecture efficientnet_b0 --image-size 288 --epochs 12 --batch-size 80 --num-workers 16 --head-epochs 2 --backbone-lr 1e-5 --lr 1e-4 --scheduler plateau --plateau-patience 2 --early-stopping-metric macro_f1 --early-stopping-patience 4 --early-stopping-min-delta 0.001"
+make train ARGS="--no-verify-csv-paths --disable-decompression-bomb-warning --architecture efficientnet_b0 --image-size 288 --epochs 12 --batch-size 80 --num-workers 16 --head-epochs 2 --backbone-lr 1e-5 --lr 1e-4 --scheduler plateau --plateau-patience 2 --early-stopping-metric macro_f1 --early-stopping-patience 4 --early-stopping-min-delta 0.001"
 ```
 
 **G2 — ResNet-50 @ 224**
 
 ```bash
 cd model
-make train ARGS="--no-verify-csv-paths --architecture resnet50 --image-size 224 --epochs 12 --batch-size 96 --num-workers 16 --head-epochs 2 --backbone-lr 1e-5 --lr 1e-4 --scheduler plateau --plateau-patience 2 --early-stopping-metric macro_f1 --early-stopping-patience 4 --early-stopping-min-delta 0.001"
+make train ARGS="--no-verify-csv-paths --disable-decompression-bomb-warning --architecture resnet50 --image-size 224 --epochs 12 --batch-size 96 --num-workers 16 --head-epochs 2 --backbone-lr 1e-5 --lr 1e-4 --scheduler plateau --plateau-patience 2 --early-stopping-metric macro_f1 --early-stopping-patience 4 --early-stopping-min-delta 0.001"
 ```
 
 **G3 — ConvNeXt-Tiny @ 224**
 
 ```bash
 cd model
-make train ARGS="--no-verify-csv-paths --architecture convnext_tiny --image-size 224 --epochs 12 --batch-size 64 --num-workers 16 --head-epochs 2 --backbone-lr 1e-5 --lr 1e-4 --scheduler plateau --plateau-patience 2 --early-stopping-metric macro_f1 --early-stopping-patience 4 --early-stopping-min-delta 0.001"
+make train ARGS="--no-verify-csv-paths --disable-decompression-bomb-warning --architecture convnext_tiny --image-size 224 --epochs 12 --batch-size 64 --num-workers 16 --head-epochs 2 --backbone-lr 1e-5 --lr 1e-4 --scheduler plateau --plateau-patience 2 --early-stopping-metric macro_f1 --early-stopping-patience 4 --early-stopping-min-delta 0.001"
 ```
 
 **G4 — EfficientNetV2-S @ 288**
 
 ```bash
 cd model
-make train ARGS="--no-verify-csv-paths --architecture efficientnet_v2_s --image-size 288 --epochs 12 --batch-size 48 --num-workers 16 --head-epochs 2 --backbone-lr 1e-5 --lr 1e-4 --scheduler plateau --plateau-patience 2 --early-stopping-metric macro_f1 --early-stopping-patience 4 --early-stopping-min-delta 0.001"
+make train ARGS="--no-verify-csv-paths --disable-decompression-bomb-warning --architecture efficientnet_v2_s --image-size 288 --epochs 12 --batch-size 48 --num-workers 16 --head-epochs 2 --backbone-lr 1e-5 --lr 1e-4 --scheduler plateau --plateau-patience 2 --early-stopping-metric macro_f1 --early-stopping-patience 4 --early-stopping-min-delta 0.001"
 ```
 
 **G5 — ViT-B/16 @ 224 (fixed)**
 
 ```bash
 cd model
-make train ARGS="--no-verify-csv-paths --architecture vit_b_16 --image-size 224 --epochs 12 --batch-size 64 --num-workers 16 --head-epochs 2 --backbone-lr 1e-5 --lr 1e-4 --scheduler plateau --plateau-patience 2 --early-stopping-metric macro_f1 --early-stopping-patience 4 --early-stopping-min-delta 0.001"
+make train ARGS="--no-verify-csv-paths --disable-decompression-bomb-warning --architecture vit_b_16 --image-size 224 --epochs 12 --batch-size 64 --num-workers 16 --head-epochs 2 --backbone-lr 1e-5 --lr 1e-4 --scheduler plateau --plateau-patience 2 --early-stopping-metric macro_f1 --early-stopping-patience 4 --early-stopping-min-delta 0.001"
 ```
 
 ### G6 — Multi-seed run on the G1–G5 winner
@@ -343,7 +346,7 @@ After picking the row with the best `Val macro_f1` from G1–G5, append `--extra
 
 ```bash
 cd model
-make train ARGS="--no-verify-csv-paths --architecture convnext_tiny --image-size 224 --epochs 12 --batch-size 64 --num-workers 16 --head-epochs 2 --backbone-lr 1e-5 --lr 1e-4 --scheduler plateau --plateau-patience 2 --early-stopping-metric macro_f1 --early-stopping-patience 4 --early-stopping-min-delta 0.001 --extra-seeds 43,44"
+make train ARGS="--no-verify-csv-paths --disable-decompression-bomb-warning --architecture convnext_tiny --image-size 224 --epochs 12 --batch-size 64 --num-workers 16 --head-epochs 2 --backbone-lr 1e-5 --lr 1e-4 --scheduler plateau --plateau-patience 2 --early-stopping-metric macro_f1 --early-stopping-patience 4 --early-stopping-min-delta 0.001 --extra-seeds 43,44"
 ```
 
 | # | Config summary | Seeds | Mean macro_f1 | Spread | Notes |
@@ -363,6 +366,107 @@ make train ARGS="--no-verify-csv-paths --architecture convnext_tiny --image-size
 - **Pinned `IMAGENET1K_V1` weights** for the new backbones (rather than `DEFAULT`) keep the existing transform pipeline (ImageNet mean/std @ 224 crop) usable. Tradeoff: leaves SWAG-pretrained ViT performance on the table; the alternative (a second 384-crop transform path) would have inflated training time on ~140k images.
 - **Fixed image size per arch** (no per-arch resolution sweep) avoids combinatorial blowup. Resolution sweeps are reserved for the Phase G winner.
 - **Subprocess-per-image inference is unchanged** — `classify.py` reads the `architecture` field from the checkpoint, so any G winner drops in via `artifacts/best_real_fake.pt` and `DetectorJob` keeps working without code changes.
+
+---
+
+## Phase H — From-scratch ablation (`scratch_cnn_v1`)
+
+**Status:** Architecture in code (`train/scratch_cnn.py`, ~4.9M params, hand-authored ResNet-style CNN with random init and **no torchvision / ImageNet weights**); rows below are templates — fill in `Val macro_f1` / `Val bal_acc` / metrics path after each run.
+
+### Goal
+
+Quantify the value of ImageNet pretraining on the merged ~140k dataset. **Phase G measures "which pretrained backbone wins"; Phase H measures "how much is the prior actually worth".** Same data, same val protocol, same early-stop, comparable capacity — the only meaningful difference vs G1 is the absence of any pretrained weights and the swap to a hand-authored architecture.
+
+### Fixed protocol (delta from Phase G)
+
+| Setting | Phase G value | Phase H value | Why |
+|---------|---------------|---------------|-----|
+| `--architecture` | `efficientnet_b0` (G1) | `scratch_cnn_v1` | The whole point. |
+| `--image-size` | 288 (G1) | **224** | Smaller; we are not measuring resolution effects, and a from-scratch CNN with no pretrained features doesn't benefit from extra pixels the way a fine-tuned model does. Also keeps GPU cheap so H2's 30 epochs stay tractable. |
+| `--head-epochs` | 2 | **0** | "Head warmup" assumes a pretrained backbone to protect. With random init it just runs full training under the head LR for the first 2 epochs, which is wrong. |
+| `--lr` | `1e-4` | **`1e-3`** | Standard AdamW from-scratch LR; 10x higher than fine-tuning. Lower LRs converge much more slowly when the network starts random. |
+| `--backbone-lr` | `1e-5` | **`1e-3`** | Set equal to `--lr` to silence the optimizer's "ignored backbone-lr" warning. The optimizer for `scratch_cnn_v1` uses a single param group at `--lr`. |
+| `--scheduler` | `plateau` | **`cosine`** | Cosine consistently outperforms plateau on full-budget from-scratch runs (single LR descent across the whole budget vs reactive drops). The deviation from G's plateau is an honest necessity, not a confound: H is asking a different question. |
+| Early stopping | `macro_f1`, patience 4, `min_delta 0.001` | same | Identical to G so the "did training plateau" semantics are comparable. |
+| `--no-verify-csv-paths` `--disable-decompression-bomb-warning` | yes | yes | Same merged ~140k dataset; same robustness needs. |
+| Seed | 42 | 42 | (`--extra-seeds 43,44` only on the H3 promotion row.) |
+| Augmentation | default | default | **Tradeoff (documented):** scratch CNNs usually want stronger augmentation (RandAugment / MixUp / CutMix). Keeping the default makes H about *the prior*, not *the recipe*. A future H4 with stronger aug is left as an explicit follow-up — see "Out of scope" below. |
+| AMP | on | on | |
+
+### Per-row screening
+
+| # | Arch | Image | Batch | Epochs | Notes / VRAM caveat |
+|---|------|-------|-------|--------|---------------------|
+| H1 | `scratch_cnn_v1` | 224 | 128 | **12** | **Compute-equal** with G1 (same 12-epoch budget). Expected to lose decisively; useful as the lower-bound row. |
+| H2 | `scratch_cnn_v1` | 224 | 128 | **30** | **Compute-fair**: gives random init enough time to actually converge. The honest comparison row. |
+
+A single Phase H row would be either unfair to scratch (compute-equal) or unfair to fine-tuning (compute-unequal). Doing both is cheap insurance against misreading the result. At ~4.9M params + batch 128 + 224x224 the network fits comfortably on ~12 GB; halve batch only if OOM (and record the actual batch in the row).
+
+### Results table (fill after each run)
+
+| # | Row | Image | Batch | Epochs | Val macro_f1 | Val bal_acc | Best epoch | val_loss | Per-class recall (0/1) | CM | Notes / `train_metrics_*.json` |
+|---|-----|-------|-------|--------|--------------|-------------|------------|----------|------------------------|----|--------------------------------|
+| H1 | scratch_cnn_v1 / 12 ep | 224 | 128 | 12 | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
+| H2 | scratch_cnn_v1 / 30 ep | 224 | 128 | 30 | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
+
+### Phase H — copy-paste `make` commands (run from `model/`)
+
+**H1 — compute-equal vs G1 (12 epochs)**
+
+```bash
+cd model
+make train ARGS="--no-verify-csv-paths --disable-decompression-bomb-warning --architecture scratch_cnn_v1 --image-size 224 --epochs 12 --batch-size 128 --num-workers 16 --head-epochs 0 --backbone-lr 1e-3 --lr 1e-3 --scheduler cosine --early-stopping-metric macro_f1 --early-stopping-patience 4 --early-stopping-min-delta 0.001"
+```
+
+**H2 — compute-fair (30 epochs)**
+
+```bash
+cd model
+make train ARGS="--no-verify-csv-paths --disable-decompression-bomb-warning --architecture scratch_cnn_v1 --image-size 224 --epochs 30 --batch-size 128 --num-workers 16 --head-epochs 0 --backbone-lr 1e-3 --lr 1e-3 --scheduler cosine --early-stopping-metric macro_f1 --early-stopping-patience 4 --early-stopping-min-delta 0.001"
+```
+
+### Decision rule for Phase H
+
+Compare H2 (the honest comparison row) against the Phase G winner's macro_f1 (currently G1 = **0.9655** until G2-G5 land):
+
+- **Within ~0.005** → ImageNet prior contributes little on this dataset; `scratch_cnn_v1` becomes a viable IP-clean shipping option. Promote to H3.
+- **0.005 to 0.020 below** → prior is helping but not decisively; keep pretrained for production, mark scratch as "viable fallback".
+- **More than 0.020 below** → prior is doing real work; keep pretrained. H is a scientific result, not a shipping path.
+
+### H3 — Multi-seed promotion (only if H2 wins or ties)
+
+```bash
+cd model
+make train ARGS="--no-verify-csv-paths --disable-decompression-bomb-warning --architecture scratch_cnn_v1 --image-size 224 --epochs 30 --batch-size 128 --num-workers 16 --head-epochs 0 --backbone-lr 1e-3 --lr 1e-3 --scheduler cosine --early-stopping-metric macro_f1 --early-stopping-patience 4 --early-stopping-min-delta 0.001 --extra-seeds 43,44"
+```
+
+| # | Config summary | Seeds | Mean macro_f1 | Spread | Notes |
+|---|----------------|-------|---------------|--------|-------|
+| H3 | `scratch_cnn_v1` @ 224, 30 ep, cosine, lr 1e-3 | `42,43,44` | _TBD_ | _TBD_ | Run only if H2 macro_f1 is within 0.005 of the G winner. |
+
+### Smoke test (run before launching H1)
+
+```bash
+cd model
+.venv/bin/python -m train.scratch_cnn
+```
+
+Expected output: `OK scratch_cnn_v1: params=4,906,818 (4.91M), forward shape=(2, 2), all params trainable in both stages`. The smoke test exercises `create_classifier` and `apply_train_stage` for `scratch_cnn_v1` — failure here means the wiring is broken before you waste a multi-hour training run.
+
+### Performance and scaling tradeoffs (Phase H)
+
+- **H1 (12 ep) + H2 (30 ep)** roughly triples Phase H's compute vs a single row, but a one-row Phase H would be uninterpretable (either unfair to scratch or unfair to fine-tuning). The split is the cheapest correct experiment.
+- **Augmentation parity vs from-scratch best practice** — explicit choice to NOT use stronger aug in H1/H2 so the comparison stays about the prior. Stronger aug (RandAugment / MixUp / CutMix) is reserved for H4 if H2 loses badly: that would tell us whether the gap is "no prior" or "no recipe".
+- **Inference path is free** — `classify.py` already dispatches on the checkpoint's `architecture` string, and `scratch_cnn_v1` is registered in `create_classifier`, so a winning H2/H3 checkpoint drops into `DetectorJob` with zero code changes.
+- **Owning the architecture means owning the bugs** — torchvision is battle-tested, our `scratch_cnn.py` is not. Mitigated by (a) the `__main__` smoke test in `train/scratch_cnn.py`, (b) sticking to a recognizable ResNet-18-style design (just shallower), and (c) `apply_train_stage` and `_build_optimizer` having explicit `scratch_cnn_v1` branches that fail loudly rather than silently sharing the pretrained-arch codepaths.
+- **Single-param-group optimizer is correct for random init** but rules out future "freeze early stages midway through training" experiments without a small extension to `apply_train_stage` and `_build_optimizer`. Documented as a known limit.
+
+### Out of scope (Phase H)
+
+- Replacing the production checkpoint — H is a scientific run by default; only H3+ with a passing decision-rule check would be a candidate.
+- Stronger augmentation (RandAugment / MixUp / CutMix) — explicit follow-up as H4.
+- A from-scratch ViT — ViT-B/16 needs ~10M-100M images to outperform CNNs from random init; ~140k is far below that threshold. ViT stays pretrained-only.
+- Adding more custom architectures in this pass — ship `scratch_cnn_v1`, learn from H1/H2, then iterate (`_v2` would live in the same module to keep `model.py` thin).
 
 ---
 
@@ -401,3 +505,7 @@ make train ARGS="--no-verify-csv-paths --architecture convnext_tiny --image-size
 | 2026-03-22 | — | Flat `data/` (no `training/`/`testing/` subdirs, no symlinks); eval via `--labeled-csv` + `--csv-root`; removed `build_v2_labeled_imagefolder.py` / `make rebuild-testing-v2` |
 | 2026-03-22 | — | Renamed default val image dir `test_data_v2` → `test_data` (CLI defaults + docs; rewrite CSV paths + folder on disk) |
 | 2026-04-19 | — | Added `convnext_tiny`, `efficientnet_v2_s`, `vit_b_16` to `train/model.py` (pinned `IMAGENET1K_V1` weights). `train.csv` grew from ~60k → ~140k labeled rows (balanced). Added Phase G (re-anchor + 3 new backbones screened single-seed, winner promoted to 3 seeds). Updated Phase D status table. |
+| 2026-04-19 | — | Hardened `train/data.py` against truncated/corrupt images: `ImageFile.LOAD_TRUNCATED_IMAGES = True` + try/except in `RealFakePathsDataset.__getitem__` substitutes a 256x256 gray PIL image and logs the bad path once per worker. Triggered by a G1 run dying on `OSError: image file is truncated (3 bytes not processed)` after 300 train steps. Phase G commands also gained `--disable-decompression-bomb-warning` to silence repeated PIL warnings from at least one >89M-pixel image in the new data. |
+| 2026-04-19 | — | **Production-driven data merge:** the Phase F2 winning checkpoint failed in real-world `DetectorJob` use, so ~60k additional labeled AI/non-AI images from a **different source** were merged into `train.csv` (taking it to ~140k balanced). The new images carry **no provenance flag**, so F2 is no longer reproducible and there is no longer a held-out external benchmark distinct from train. Subsequent runs (Phase G onward) measure performance on the merged distribution only. **Tradeoff documented here so the val_macro_f1 drop from F2→G1 is not misread as a model regression.** |
+| 2026-04-19 | — | Phase G1 (`efficientnet_b0` @ 288, seed 42) results logged on the merged ~140k dataset: best ep **11**, val_macro_f1 **0.9655**, bal_acc **0.9655**, val_loss **0.0926**, per-class recall **0.9672 / 0.9637**, CM **[[13536, 459], [508, 13487]]** (stamp **20260419_011716**). **−0.0235 macro_f1 vs Phase F2 mean (0.9890)** on the *old* dataset. Train/val curves (train_loss 0.0601 / train_acc 0.9778 vs val_loss 0.0916 / val_acc 0.9660 at ep12) show the gap closing rather than diverging → **not overfitting**; consistent with a harder, more diverse dataset within the same recipe. G1 is the new re-anchor row that G2–G5 must beat. |
+| 2026-04-19 | — | Added **Phase H** (from-scratch ablation): new arch `scratch_cnn_v1` in `train/scratch_cnn.py` (~4.9M params, hand-authored ResNet-style CNN, no torchvision/ImageNet weights). Wired through `train/model.py::create_classifier` + `apply_train_stage` (both stages unfreeze all — no pretrained backbone to protect) and `train/entry.py::_build_optimizer` (single AdamW param group at `--lr`; `--backbone-lr` ignored with a warning). Inference path unchanged: `classify.py` re-instantiates via `create_classifier` from the checkpoint's `architecture` field. Smoke test: `python -m train.scratch_cnn`. Phase H1 (12 ep, compute-equal vs G1) and H2 (30 ep, compute-fair) screening rows + decision rule + H3 multi-seed promotion path documented. |
