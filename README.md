@@ -6,7 +6,7 @@ Web app for detecting AI-generated content in photographs and videos.
 
 - **backend** — Rails API (file upload, hashing, file_hashes DB, detector job)
 - **frontend** — React + TypeScript + Vite (File tester UI)
-- **model** — (see `model/README.md`)
+- **model** — training and inference (see `model/README.md`, including `ingest_upload_to_train.py` to copy images from `upload/` into `train_data` and append `train.csv`)
 
 ## Prerequisites
 

@@ -54,6 +54,20 @@ Training always reads from a **local directory** (no automatic Kaggle downloads)
 
 **Layout:** put `train.csv`, `test.csv`, and flat folders `train_data/` and `test_data/` under **`model/data/`** (defaults; override with `--csv-*` flags). Paths in CSVs are usually **relative to that root** (e.g. `train_data/uuid.jpg`). If `test.csv` is **paths-only** (no label column), the trainer builds a **stratified validation holdout from `train.csv`** and only checks that unlabeled test paths exist for sanity; use **`--no-verify-csv-paths`** on large sets to skip per-row `stat` during startup (failures show up when an image is loaded). Optional **`source_labels.csv`** in the same folder for held-out eval (see **[docs/DATA_LAYOUT.md](docs/DATA_LAYOUT.md)** and **[docs/RESTORE_TEST_LABELS.md](docs/RESTORE_TEST_LABELS.md)**). The whole `data/` tree is gitignored.
 
+#### Ingest `upload/AI` and `upload/nonAI` into `train.csv`
+
+Small helper **[ingest_upload_to_train.py](ingest_upload_to_train.py)** (stdlib only): in one run it **lists all pending** images under `data/upload/AI` then `data/upload/nonAI` (sorted), then processes them in **batches** (default 256): copy each file in the batch, append that many rows to `train.csv`, then rename each source to `uploaded_<name>`. Filenames already starting with `uploaded` (any case) are skipped. Progress goes to **stderr** at INFO; use **`-v`** for per-batch timings. **`--batch-size`** changes batch size. CSV shape: ``, `file_name`, `label` (index, `train_data/...`, **`0`** = not AI, **`1`** = AI).
+
+```bash
+cd model
+python3 ingest_upload_to_train.py
+python3 ingest_upload_to_train.py --batch-size 512
+python3 ingest_upload_to_train.py -v
+python3 ingest_upload_to_train.py --dry-run
+```
+
+The trainer still reads `label` as text (`"0"` / `"1"`); that matches your existing `train.csv`.
+
 ```bash
 cd model
 make train

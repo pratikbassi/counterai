@@ -12,7 +12,24 @@ from torch.utils.data import Dataset
 from torchvision import datasets
 from torchvision import transforms
 
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+IMAGE_EXTENSIONS = {
+    ".jpg",
+    ".jpeg",
+    ".jpe",
+    ".jfif",
+    ".png",
+    ".bmp",
+    ".webp",
+    ".gif",
+    ".tif",
+    ".tiff",
+    ".heic",
+    ".heif",
+    ".avif",
+    ".ppm",
+    ".pgm",
+    ".pbm",
+}
 
 # CSV + flat image folders (e.g. AI vs human Kaggle layout)
 _DEFAULT_TRAIN_IMAGE_DIR = "train_data"
