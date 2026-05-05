@@ -1,0 +1,5 @@
+# Minimal deps for classify.py inference (Docker / production classifier).
+torch>=2.9.1
+torchvision>=0.24.0
+Pillow>=11.0.0
+numpy>=2.1.0

@@ -19,36 +19,32 @@ So the main integration path is wired. What remains is production hardening and 
 
 ## What still needs to be done
 
-## 1) Make Python runtime and model path configurable
+## 1) Make Python runtime and model path configurable — **DONE (2026-04-23)**
 
-Current code assumes:
-- Python binary: `model/.venv/bin/python`
-- Script path: `model/classify.py`
-- Checkpoint default inside Python script: `model/artifacts/best_real_fake.pt`
+`DetectorJob` now freezes four paths/values at class-load time, each with an ENV override and a production-safe default:
 
-### Why this matters
-- Deploys can fail if `.venv` path differs or checkpoint is not present at that location.
-- Containerized environments usually require explicit env-driven paths.
+| Constant | ENV override | Default |
+|---|---|---|
+| `PYTHON_BIN` | `CLASSIFIER_PYTHON` | `model/.venv/bin/python` |
+| `CLASSIFY_SCRIPT` | `CLASSIFIER_SCRIPT` | `model/classify.py` |
+| `CHECKPOINT_PATH` | `CLASSIFIER_CHECKPOINT` | `model/artifacts/best_real_fake_20260422_002356_seed42.pt` (Phase G6 winner, see `model/docs/MODEL_ABLATION_PLAN.md`) |
+| `DEVICE` | `CLASSIFIER_DEVICE` | `cpu` |
 
-### Action
-- Add env vars in Rails job for:
-  - classifier python executable
-  - classifier script path
-  - checkpoint path
-  - device (`cpu`/`cuda`/`auto`)
-- Pass checkpoint explicitly to classifier CLI (`--checkpoint`).
+The job now passes `--checkpoint` explicitly to `classify.py`, so the deployed model **no longer depends on which training run last overwrote `best_real_fake.pt`**.
 
-## 2) Add timeout and subprocess safety controls
+### Tradeoffs
+- **Pinned stamp vs "latest" symlink.** Production pins the exact stamped file so training runs cannot silently reshuffle the deployed model. The cost is a manual change to update production when a new winner is promoted (edit this file + bump `DEFAULT_CHECKPOINT_FILENAME` or set `CLASSIFIER_CHECKPOINT`). Preferred over the symlink-style default because "you trained something last night" should not rotate production.
+- **Class-load freezing.** Constants are evaluated once per Rails process. Changing ENV requires a worker restart; this matches Rails idioms and avoids per-request ENV lookups.
 
-Current `Open3.capture3` call has no timeout.
+### Remaining follow-up
+- Nothing blocking; revisit the default when the next Phase (H, or a newer G-class winner) is promoted.
 
-### Why this matters
-- A hanging Python process can stall queue workers and reduce throughput.
+## 2) Add timeout and subprocess safety controls — **DONE (implementation: `CLASSIFIER_TIMEOUT_SEC`)**
 
-### Action
-- Add max execution time (e.g., `DETECTOR_TIMEOUT_SEC`).
-- Kill process on timeout and keep `ai_status` unchanged (`unknown`) or move to failure state (see item 4).
-- Log timeout as structured error with hash + file path.
+`Open3.capture3` is wrapped in `Timeout.timeout`, configured by `CLASSIFIER_TIMEOUT_SEC` (see `DetectorJob.classifier_timeout_sec`). On timeout or non-zero exit the record stays `unknown` and errors are logged without noisy full-path / full-stderr dumps.
+
+### Remaining follow-up
+- Optionally `Process.kill`/`Open3` process group kill for hard hung native code (Ruby `Timeout` does not always stop the child process).
 
 ## 3) Strengthen label mapping contract
 
@@ -84,11 +80,7 @@ Current behavior on classifier failure:
 
 ## 5) Gate by media type and support video path
 
-Current classifier script is image-oriented (`PIL.Image.open` on one file).
-
-### Why this matters
-- Backend accepts image/video uploads, but current classifier path is image-only.
-- Video files may fail in classifier and remain `unknown`.
+The API and UI are **image-only** for the MVP (JPEG/PNG/WebP/GIF). Video and other types are rejected at upload with 415.
 
 ### Action
 - Add media-type sniffing before enqueue or in job.
@@ -147,13 +139,13 @@ Current tests mostly cover controller flows; detector integration coverage is li
 
 ## Suggested implementation order (fastest safe path)
 
-1. Configurable paths/env + timeout
+1. ~~Configurable paths/env + timeout~~ (`CLASSIFIER_*`, `CLASSIFIER_TIMEOUT_SEC`)
 2. Explicit label contract (`class_id`/`is_ai`)
 3. Retry/error metadata columns
 4. Confidence/model metadata persistence
-5. Media-type routing (image vs video)
+5. Video pipeline for supported formats (beyond current image-only uploads)
 6. Metrics and dashboards
-7. Full test suite hardening
+7. Extend job/request/integration tests (beyond current harness)
 
 ## Performance and scaling tradeoffs
 

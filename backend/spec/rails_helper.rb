@@ -67,4 +67,10 @@ config.infer_spec_type_from_file_location!
   config.filter_rails_from_backtrace!
   # arbitrary gems may also be filtered via:
   # config.filter_gems_from_backtrace("gem name")
+
+  # Request specs enqueue `DetectorJob`; `solid_queue` in test needs extra DB setup,
+  # so use the test adapter and assert on the queue when needed.
+  config.before do
+    ActiveJob::Base.queue_adapter = :test
+  end
 end

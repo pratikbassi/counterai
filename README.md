@@ -1,6 +1,6 @@
 # CounterAI
 
-Web app for detecting AI-generated content in photographs and videos.
+Web app for detecting AI-generated content in **images**.
 
 ## Repo layout
 
@@ -120,25 +120,22 @@ The deployable Rails app lives in **`backend/`**. From a machine with the [Herok
 
 The **`backend/Procfile`** defines `release: bundle exec rails db:prepare` (migrations on each release) and `web: ./bin/thrust ./bin/rails server`. After deploy, open the app URL or run `heroku logs --tail -a your-app-name` to verify boot.
 
-**Frontend:** Host the Vite app separately (for example a second Heroku static site, Netlify, or Vercel). Set `VITE_API_BASE_URL` at build time to your API’s public URL. For production CORS, the API currently allows localhost Vite origins and broad development behavior; extend `FileHashesController#set_cors_headers` when your deployed frontend uses another origin.
+**Frontend:** Host the Vite app separately (for example Netlify or Vercel). Set `VITE_API_BASE_URL` at **build time** to your API’s public URL. Set **`FRONTEND_ORIGINS`** on the Rails API so `FileHashesController` can emit CORS headers for your static origin (`DEPLOYMENT.md`).
+
+### Single-host Docker (recommended MVP)
+
+Compose file, Postgres, and optional TLS (Caddy) are documented in [`DEPLOYMENT.md`](DEPLOYMENT.md). Mirror variables from [`deploy/env.docker.example`](deploy/env.docker.example) into repo-root `.env`.
 
 ## Current status
 
-- **File tester (frontend)** — User can select an image, upload it, and see:
+- **File tester (frontend)** — User can select an image, upload it, poll until detection finishes, and see:
   - Whether the image hash was **found in the database** or **newly added**
-  - **AI content** status: *AI Detected*, *AI Not Detected*, or *Unknown AI content*
-- **Backend API** — Upload endpoint stores the file, computes SHA-256, creates/finds a `FileHash` record with `ai_status` (unknown / ai_detected / ai_not_detected), and enqueues `DetectorJob` with the file path.
-- **DetectorJob** — Placeholder only (logs and sleeps). **Real AI detection is not implemented yet**; see “Work left” below.
+  - **AI content** status: *AI Detected*, *AI Not Detected*, or *Unknown* while processing
+- **Backend API** — `POST /file_hashes/upload` stores the image, computes SHA-256, creates/finds a `FileHash`, and enqueues `DetectorJob`.
+- **`GET /file_hashes/:hash`** — Returns `{ hash, found_in_database, ai_status }` for polling after upload.
 
-## Work left: DetectorJob
+## Detector implementation
 
-The job receives the uploaded file path and should:
+[`backend/app/jobs/detector_job.rb`](backend/app/jobs/detector_job.rb) invokes `model/classify.py` with environment-overridable `CLASSIFIER_*` paths (see [`DEPLOYMENT.md`](DEPLOYMENT.md)).
 
-1. **Run AI detection** on the file (image/video) using your chosen model or service.
-2. **Update the `FileHash` record** with the result:
-   - Set `ai_status` to `ai_detected` or `ai_not_detected` (and optionally store confidence or metadata if you add columns).
-3. **Handle errors** (e.g. mark as `unknown` or retry) and consider idempotency (same file path / hash run multiple times).
-
-Until this is implemented, all entries stay in **Unknown AI content**. The frontend and API already support the three states; only the job logic needs to be added.
-
-See **backend/README.md** for how to run the backend and for more detail on the detector job.
+Additional production hardening (retries, label contract, video path, observability): [`DETECTOR_JOB_TODO.md`](DETECTOR_JOB_TODO.md).

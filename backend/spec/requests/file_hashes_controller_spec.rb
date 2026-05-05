@@ -1,5 +1,6 @@
 require "rails_helper"
 require "digest"
+require "stringio"
 
 RSpec.describe "FileHashesController", type: :request do
   let(:existing_hash) { "abc123def456" }
@@ -96,23 +97,53 @@ RSpec.describe "FileHashesController", type: :request do
   end
 
   describe "POST /file_hashes/upload" do
+    def upload_minimal_png(original_filename: "minimal.png")
+      Rack::Test::UploadedFile.new(
+        Rails.root.join("spec/fixtures/files/minimal.png"),
+        "image/png",
+        original_filename:
+      )
+    end
+
     it "should upload file and return hash" do
-      file = fixture_file_upload("spec/fixtures/files/test.txt", "text/plain")
-      
+      file = upload_minimal_png
+
       post file_hashes_upload_path, params: { file: file }
-      
+
       expect(response).to have_http_status(:created)
       json_response = JSON.parse(response.body)
       expect(json_response["hash"]).to be_present
-      expect(json_response["filename"]).to eq("test.txt")
+      expect(json_response["filename"]).to eq("minimal.png")
       expect(json_response["size"]).to be_present
       expect(json_response["saved_at"]).to be_present
-      
+
       # Verify hash was saved to database
       expect(FileHash.exists?(hash_value: json_response["hash"])).to be true
-      
+
       # Verify file was saved to storage
       expect(File.exist?(Rails.root.join(json_response["saved_at"]))).to be true
+    end
+
+    it "should reject non-image uploads" do
+      file = fixture_file_upload("spec/fixtures/files/test.txt", "text/plain")
+
+      post file_hashes_upload_path, params: { file: file }
+
+      expect(response).to have_http_status(:unsupported_media_type)
+      json_response = JSON.parse(response.body)
+      expect(json_response["error"]).to eq("unsupported file type")
+    end
+
+    it "should reject image content_type with mismatched extension" do
+      file = Rack::Test::UploadedFile.new(
+        Rails.root.join("spec/fixtures/files/minimal.png"),
+        "image/png",
+        original_filename: "trick.txt"
+      )
+
+      post file_hashes_upload_path, params: { file: file }
+
+      expect(response).to have_http_status(:unsupported_media_type)
     end
 
     it "should reject upload without file parameter" do
@@ -125,138 +156,161 @@ RSpec.describe "FileHashesController", type: :request do
 
     it "should reject file larger than 25MB" do
       # Create a temporary file larger than 25MB
-      large_file = Tempfile.new(["large", ".txt"])
+      large_file = Tempfile.new(["large", ".png"])
       large_file.write("x" * (25.megabytes + 1))
       large_file.rewind
-      
-      upload = Rack::Test::UploadedFile.new(large_file.path, "text/plain")
-      
+
+      upload = Rack::Test::UploadedFile.new(large_file.path, "image/png")
+
       post file_hashes_upload_path, params: { file: upload }
-      
+
       expect(response).to have_http_status(:content_too_large)
       json_response = JSON.parse(response.body)
       expect(json_response["error"]).to eq("file size exceeds maximum allowed size of 25MB")
-      
+
       large_file.close
       large_file.unlink
     end
 
     it "should accept file exactly 25MB" do
-      # Create a temporary file exactly 25MB
-      large_file = Tempfile.new(["large", ".txt"])
-      large_file.write("x" * 25.megabytes)
+      large_file = Tempfile.new(["large", ".png"])
+      large_file.write("y" * 25.megabytes)
       large_file.rewind
-      
-      upload = Rack::Test::UploadedFile.new(large_file.path, "text/plain")
-      
+
+      upload = Rack::Test::UploadedFile.new(large_file.path, "image/png")
+
       post file_hashes_upload_path, params: { file: upload }
-      
+
       expect(response).to have_http_status(:created)
       json_response = JSON.parse(response.body)
       expect(json_response["size"]).to eq(25.megabytes)
-      
+
       large_file.close
       large_file.unlink
     end
 
     it "should generate correct SHA-256 hash" do
-      # Create a file with known content
-      test_content = "Hello, World!"
-      file = Tempfile.new(["test", ".txt"])
-      file.write(test_content)
-      file.rewind
-      
-      upload = Rack::Test::UploadedFile.new(file.path, "text/plain")
-      
+      test_content = File.binread(Rails.root.join("spec/fixtures/files/minimal.png"))
+
+      upload = Rack::Test::UploadedFile.new(
+        StringIO.new(test_content),
+        "image/png",
+        original_filename: "minimal.png"
+      )
+
       post file_hashes_upload_path, params: { file: upload }
-      
+
       expect(response).to have_http_status(:created)
       json_response = JSON.parse(response.body)
-      
-      # Calculate expected hash
+
       expected_hash = Digest::SHA256.hexdigest(test_content)
       expect(json_response["hash"]).to eq(expected_hash)
-      
-      file.close
-      file.unlink
     end
 
     it "should handle duplicate file uploads" do
-      test_content = "Duplicate test content"
-      file1 = Tempfile.new(["test1", ".txt"])
-      file1.write(test_content)
-      file1.rewind
-      
-      file2 = Tempfile.new(["test2", ".txt"])
-      file2.write(test_content)
-      file2.rewind
-      
-      upload1 = Rack::Test::UploadedFile.new(file1.path, "text/plain")
-      upload2 = Rack::Test::UploadedFile.new(file2.path, "text/plain")
-      
+      test_content = File.binread(Rails.root.join("spec/fixtures/files/minimal.png"))
+
+      upload1 = Rack::Test::UploadedFile.new(StringIO.new(test_content), "image/png", original_filename: "one.png")
+
+      upload2 = Rack::Test::UploadedFile.new(StringIO.new(test_content), "image/png", original_filename: "two.png")
+
       # First upload
       post file_hashes_upload_path, params: { file: upload1 }
       expect(response).to have_http_status(:created)
       json_response1 = JSON.parse(response.body)
       hash1 = json_response1["hash"]
-      
+
       # Second upload with same content
       post file_hashes_upload_path, params: { file: upload2 }
       expect(response).to have_http_status(:created)
       json_response2 = JSON.parse(response.body)
       hash2 = json_response2["hash"]
-      
+
       # Hashes should be the same
       expect(hash1).to eq(hash2)
-      
+
       # But only one record in database
       expect(FileHash.where(hash_value: hash1).count).to eq(1)
-      
-      file1.close
-      file1.unlink
-      file2.close
-      file2.unlink
     end
 
     it "should save file to organized directory structure" do
-      file = fixture_file_upload("spec/fixtures/files/test.txt", "text/plain")
-      
+      file = upload_minimal_png
+
       post file_hashes_upload_path, params: { file: file }
-      
+
       expect(response).to have_http_status(:created)
       json_response = JSON.parse(response.body)
       saved_path = json_response["saved_at"]
-      
+
       # Should be in storage/uploads/YYYY/MM/DD/ format
       expect(saved_path).to match(%r{storage/uploads/\d{4}/\d{2}/\d{2}/})
-      
+
       # File should exist
       expect(File.exist?(Rails.root.join(saved_path))).to be true
     end
 
-    it "should handle binary files" do
-      # Create a binary file (simulate image)
-      binary_content = "\x89PNG\r\n\x1a\n" + ("\x00" * 100)
+    it "should handle binary PNG files" do
+      binary_content = File.binread(Rails.root.join("spec/fixtures/files/minimal.png"))
       file = Tempfile.new(["test", ".png"])
       file.binmode
       file.write(binary_content)
       file.rewind
-      
+
       upload = Rack::Test::UploadedFile.new(file.path, "image/png")
-      
+
       post file_hashes_upload_path, params: { file: upload }
-      
+
       expect(response).to have_http_status(:created)
       json_response = JSON.parse(response.body)
       expect(json_response["hash"]).to be_present
-      
+
       # Verify file was saved correctly
       saved_file_path = Rails.root.join(json_response["saved_at"])
       expect(File.exist?(saved_file_path)).to be true
       expect(File.size(saved_file_path)).to eq(binary_content.bytesize)
-      
+
       file.close
       file.unlink
+    end
+  end
+
+  describe "GET /file_hashes/:hash" do
+    let(:known_sha256) { Digest::SHA256.hexdigest("known-hash-payload") }
+    let(:unknown_sha256) { Digest::SHA256.hexdigest("unknown-entry") }
+
+    before do
+      FileHash.find_or_initialize_by(hash_value: known_sha256).tap do |fh|
+        fh.ai_status = :ai_detected
+        fh.save!
+      end
+    end
+
+    it "returns status for an existing hash" do
+      get "/file_hashes/#{known_sha256}"
+
+      expect(response).to have_http_status(:ok)
+      json = JSON.parse(response.body)
+      expect(json["hash"]).to eq(known_sha256)
+      expect(json["found_in_database"]).to be true
+      expect(json["ai_status"]).to eq("ai_detected")
+    end
+
+    it "returns 404 with unknown ai_status when hash not in DB" do
+      get "/file_hashes/#{unknown_sha256}"
+
+      expect(response).to have_http_status(:not_found)
+      json = JSON.parse(response.body)
+      expect(json["hash"]).to eq(unknown_sha256)
+      expect(json["found_in_database"]).to be false
+      expect(json["ai_status"]).to eq("unknown")
+    end
+
+    it "returns 400 when hash is not a lowercase SHA-256 hex string" do
+      get "/file_hashes/not-a-valid-sha256-hash-value-at-all"
+
+      expect(response).to have_http_status(:bad_request)
+      json = JSON.parse(response.body)
+      expect(json["error"]).to eq("invalid hash")
     end
   end
 end

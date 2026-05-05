@@ -1,143 +1,100 @@
 # CounterAI Deployment Guide
 
 This repo is a monorepo with:
-- `backend`: Rails API (already Docker/Kamal-ready)
-- `frontend`: Vite React app (builds to static files)
-- `model`: Python training/inference code used by `DetectorJob` in production
 
-## What deployment solutions already exist
+- `backend/` — Rails 8 API, PostgreSQL, Solid Queue, `DetectorJob` (subprocess to Python `model/classify.py`)
+- `frontend/` — Vite + React static app
+- `model/` — Training and inference (`classify.py`, pinned checkpoint for production)
 
-### 1) Kamal-based backend deployment (already scaffolded)
-- Existing config: `backend/config/deploy.yml`
-- Existing dependency: `kamal` gem in `backend/Gemfile`
-- Existing production container: `backend/Dockerfile`
-- Best when you want repeatable container deploys to one or more Linux servers.
+## MVP deploy target
 
-### 2) Direct Docker deployment for backend (already supported)
-- `backend/Dockerfile` includes a production build and run flow.
-- Useful for simple VM/container-host setups before adopting full Kamal workflows.
+**Recommended for launch:** single Linux host running **Docker Compose** with Postgres in a companion container, optional **Caddy** for TLS (`--profile tls`). This path ships the classifier Python venv plus `model/` in one image (`Dockerfile` at repo root) so `Rails.root/../model` resolves to `/model` inside the container.
 
-### 3) Static hosting for frontend (already supported by Vite build)
-- `frontend` builds static assets via `npm run build`.
-- Can be hosted on CDN/static platforms (Cloudflare Pages, Netlify, Vercel static, S3+CloudFront, Nginx).
+**Alternatives (not scripted in this MVP doc):**
 
-## Recommended production setup
+- **Heroku** — `PROJECT_PATH=backend` subdir builds **omit** sibling `model/` and a multi-hundred-megabyte Torch stack unless you vendor them; expect slug-size friction. Prefer this Compose path or a container registry deploy.
+- **Kamal** — [`backend/config/deploy.yml`](backend/config/deploy.yml) is scaffolded; point it at the **root** `Dockerfile` (or a dedicated image) once registry and hosts are chosen.
 
-For a low-ops setup with clean scaling boundaries:
-- Deploy `backend` as a Docker container (Kamal or direct Docker).
-- Deploy `frontend` as static assets on a CDN/static host.
-- Set `VITE_API_BASE_URL` at frontend build time to your backend URL.
+## Environment variables (runtime)
 
-This separates traffic-heavy static delivery from API compute, which scales better and is cheaper.
+| Variable | Purpose |
+|----------|---------|
+| `RAILS_MASTER_KEY` | Required in production (from `backend/config/master.key`). |
+| `DATABASE_URL` | PostgreSQL URL (Compose example below). |
+| `CLASSIFIER_PYTHON` | Python that runs `classify.py` (default in image: `/opt/counterai/.venv/bin/python`). |
+| `CLASSIFIER_SCRIPT` | Path to `classify.py` (default: `/model/classify.py`). |
+| `CLASSIFIER_CHECKPOINT` | Pinned weights file (default: `/model/artifacts/best_real_fake_20260422_002356_seed42.pt`). |
+| `CLASSIFIER_DEVICE` | `cpu` or `cuda` (default `cpu`). |
+| `CLASSIFIER_TIMEOUT_SEC` | Subprocess wall-clock limit for `classify.py` (default `60`). |
+| `FRONTEND_ORIGINS` | Comma-separated **exact** browser origins allowed for CORS in production (e.g. `https://app.example.com`). In development, `localhost:5173` is still allowed. |
+| `SOLID_QUEUE_IN_PUMA` | Set `true` on a **single** web container so Solid Queue runs inside Puma (see `backend/config/puma.rb`). |
+| `RAILS_MAX_THREADS` | Keep aligned with Puma threads and the DB pool (`backend/config/database.yml`). |
 
-### Detector-aware topology (assumes detector hardening is complete)
-- Web/API container: handles HTTP requests and enqueues jobs.
-- Job worker container(s): runs `DetectorJob` with Python/model runtime.
-- Shared persistent storage: uploaded files and DB/queue files (or object storage + Postgres in scaled setups).
-- Optional GPU worker pool for higher detector throughput.
+## Single-host Docker Compose (Postgres + web)
 
-## Backend deployment (simple Docker path)
+1. Place the promoted checkpoint under `model/artifacts/best_real_fake_20260422_002356_seed42.pt` (see [`model/docs/MODEL_ABLATION_PLAN.md`](model/docs/MODEL_ABLATION_PLAN.md) Phase G6).
+2. Copy [`deploy/env.docker.example`](deploy/env.docker.example) to repo-root `.env`, set strong `POSTGRES_PASSWORD` and `RAILS_MASTER_KEY`, set `FRONTEND_ORIGINS` to your static site origin(s). `chmod 600 .env`.
+3. Build and start:
 
-From `backend/`:
+   ```bash
+   docker compose build
+   docker compose up -d db
+   docker compose run --rm web bin/rails db:prepare
+   docker compose up -d web
+   ```
 
-```bash
-docker build -t counterai-backend .
-docker run -d \
-  --name counterai-backend \
-  -p 3000:80 \
-  -e RAILS_MASTER_KEY=your_master_key_here \
-  -e DETECTOR_PYTHON=/opt/counterai/model/.venv/bin/python \
-  -e DETECTOR_SCRIPT=/opt/counterai/model/classify.py \
-  -e DETECTOR_CHECKPOINT=/opt/counterai/model/artifacts/best_real_fake.pt \
-  -e DETECTOR_DEVICE=cpu \
-  -e DETECTOR_TIMEOUT_SEC=60 \
-  -e DETECTOR_MAX_RETRIES=3 \
-  -v counterai_backend_storage:/rails/storage \
-  counterai-backend
-```
+4. API on the host: `http://127.0.0.1:8080` (maps container port 80). Health: `GET /up`.
+5. **Optional TLS** — point DNS for `API_HOST` at the host, then:
 
-Notes:
-- `RAILS_MASTER_KEY` is required in production.
-- Keep `/rails/storage` on a persistent volume (SQLite DB + uploads + queue DB files).
-- Health check endpoint: `GET /up`.
-- Ensure detector runtime artifacts are present in the container/host:
-  - Python environment
-  - classifier script
-  - trained checkpoint
+   ```bash
+   docker compose --profile tls up -d
+   ```
 
-### Separate web and worker processes (recommended)
+   Caddy reads [`deploy/caddy/Caddyfile`](deploy/caddy/Caddyfile) and obtains Let’s Encrypt certificates.
 
-For better throughput and isolation, run web and worker separately:
+### Postgres notes
 
-```bash
-# Web/API
-docker run -d --name counterai-web -p 3000:80 ... counterai-backend
+- The `db` service has **no** published ports; only the internal Docker network can reach it.
+- Backups: schedule a nightly `pg_dump` from the host (example in [MVP_LAUNCH_PLAN.md](../MVP_LAUNCH_PLAN.md) D9). Encrypt and copy off-box; run a restore drill before launch.
 
-# Worker (same image, different command)
-docker run -d --name counterai-worker ... counterai-backend ./bin/jobs
-```
-
-Scale workers horizontally as queue latency grows.
-
-## Backend deployment (Kamal path)
-
-From `backend/`:
-1. Update `config/deploy.yml`:
-   - `servers.web`
-   - `servers.job` (dedicated worker hosts/containers)
-   - `registry.server` and credentials
-   - optional `proxy.host` and SSL settings
-2. Set secrets (including `RAILS_MASTER_KEY`) in `.kamal/secrets`.
-3. Set clear env for detector runtime on relevant roles:
-   - `DETECTOR_PYTHON`
-   - `DETECTOR_SCRIPT`
-   - `DETECTOR_CHECKPOINT`
-   - `DETECTOR_DEVICE`
-   - `DETECTOR_TIMEOUT_SEC`
-   - retry/error-handling envs used by your finalized detector implementation
-4. Deploy:
-
-```bash
-bin/kamal setup
-bin/kamal deploy
-```
-
-## Frontend deployment
+## Frontend (static)
 
 From `frontend/`:
 
 ```bash
-npm ci
-VITE_API_BASE_URL=https://api.your-domain.com npm run build
+pnpm install
+VITE_API_BASE_URL=https://api.example.com pnpm run build
 ```
 
-Deploy `frontend/dist/` to your static host.
+Deploy `frontend/dist/` to your static host. Set `FRONTEND_ORIGINS` on the API to that origin.
 
-## Important current constraints
+## Launch smoke checklist
 
-- Current backend CORS logic should explicitly allow your deployed frontend origin(s).
-- If running multi-node, avoid local-only storage coupling:
-  - move from SQLite to Postgres
-  - move uploads to shared object storage (or shared volume with strong guarantees)
-- Detector pipeline should run with:
-  - timeout enforcement
-  - retry/error metadata
-  - explicit label contract (`is_ai`/`class_id`) to avoid mapping drift
-  - media routing (image vs video)
+1. `curl -sf http://127.0.0.1:8080/up` (or `https://$API_HOST/up` behind Caddy) returns 200.
+2. `POST /file_hashes/upload` with a small PNG returns 201 and a 64-char `hash`.
+3. Poll `GET /file_hashes/:hash` until `ai_status` is `ai_detected` or `ai_not_detected` (not `unknown`), or confirm `DetectorJob` logs show the pinned checkpoint basename.
+4. Confirm Postgres is not exposed on a public interface (`ss` / hosting firewall).
+5. Confirm an unknown browser origin does **not** receive `Access-Control-Allow-Origin`.
+6. **Before public traffic:** plan rate limiting (see [`MVP_LAUNCH_PLAN.md`](../MVP_LAUNCH_PLAN.md)).
 
-## Detector deployment checklist
+## Bootstrap runbook (first production host)
 
-- Confirm model checkpoint exists at `DETECTOR_CHECKPOINT`.
-- Verify Python binary and script paths are correct and executable.
-- Smoke-test one image and one video path through `DetectorJob`.
-- Validate job retries and timeout behavior in production logs.
-- Confirm confidence/model-version metadata is being persisted.
-- Set alerts on detector error rate and queue delay.
+See [MVP_LAUNCH_PLAN.md](../MVP_LAUNCH_PLAN.md) card **D10** for the full ordered checklist (VM provisioning, `.env`, `db:prepare`, HTTPS, curl upload, backups).
 
-## Scaling tradeoffs (quick view)
+### VM hardening (summary)
 
-- **Fastest to launch:** single VM + web+worker in one host + frontend static host.
-- **Better reliability:** separate web/worker roles + Kamal + monitored nodes + backups.
-- **Higher throughput:** dedicated worker autoscaling and optional GPU workers.
-- **Most scalable architecture:** Postgres + object storage + inference service (HTTP/gRPC) instead of per-job subprocess.
+SSH key-only login, `ufw` allowing only 22 / 80 / 443 from the internet as needed, unattended security updates. Details: **D11** in [MVP_LAUNCH_PLAN.md](../MVP_LAUNCH_PLAN.md).
 
+## Detector integration (reminders)
+
+- Subprocess inference is intentional for MVP; consider a dedicated inference HTTP service when queue latency warrants it.
+- Optional hardening backlog: timeouts (implemented via `CLASSIFIER_TIMEOUT_SEC`), explicit JSON contract from `classify.py`, retries / error columns, observability (`DETECTOR_JOB_TODO.md`).
+
+## Frontend / API constraints
+
+- **Image-only uploads** — JPEG / PNG / WebP / GIF; content type and extension are both enforced server-side.
+- **CORS** — production allows only origins listed in `FRONTEND_ORIGINS` plus dev localhost.
+
+## Older `backend/` Dockerfile
+
+[`backend/Dockerfile`](backend/Dockerfile) still builds backend-only Rails **without** the Python stack or `/model`; use it only if you intentionally provide the classifier elsewhere. For MVP single-host deployment, prefer the repo-root **`Dockerfile`**.

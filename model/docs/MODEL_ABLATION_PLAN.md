@@ -299,9 +299,9 @@ Re-anchor the EfficientNet-B0 baseline on the larger dataset, screen each new ba
 |---|------|-------|-------|--------------|-------------|------------|----------|------------------------|----|--------------------------------|
 | G1 | efficientnet_b0 | 288 | 80 | **0.9655** | **0.9655** | 11 | 0.0926 | 0.9672 / 0.9637 | [[13536, 459], [508, 13487]] | Stamp **20260419_011716**; 12/12 epochs ran; ep12 macro_f1=0.9660 (no improvement, patience 1/4); val_acc 0.9654; **−0.0235** vs Phase F2 mean (0.9890) — consistent with the new ~140k dataset being harder/noisier than the original ~60k, not a model regression. `artifacts/train_metrics_20260419_011716.json` |
 | G2 | resnet50 | 224 | 96 | **0.9507** | **0.9507** | 9 | 0.1441 | 0.9543 / 0.9471 | [[13356, 639], [741, 13254]] | Stamp **20260419_123320**; 12/12 epochs; best ep **9** (ep12 val macro_f1=0.9510, no improvement on macro_f1, patience 3/4); val_acc **0.9508**; **−0.0148** vs G1 (0.9655). `artifacts/train_metrics_20260419_123320.json` |
-| G3 | convnext_tiny | 224 | 64 | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
-| G4 | efficientnet_v2_s | 288 | 48 | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
-| G5 | vit_b_16 | 224 | 64 | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
+| G3 | convnext_tiny | 224 | 64 | **0.9754** | **0.9754** | 11 | 0.0898 | 0.9753 / 0.9755 | [[13649, 346], [343, 13652]] | Stamp **20260420_101052**; 12/12 epochs ran; ep12 macro_f1=0.9749 (patience 1/4, no early stop); val_acc 0.9754; **+0.0099 macro_f1 vs G1 (0.9655)** and much tighter per-class balance (0.9753/0.9755 vs G1's 0.9672/0.9637). Train/val gap at ep11 modest (train_acc 0.9968 vs val_acc 0.9754 → ~2.1pp, not alarming at 12 ep). `artifacts/train_metrics_20260420_101052.json` |
+| G4 | efficientnet_v2_s | 288 | 48 | **0.9799** | **0.9799** | 12 | 0.0700 | 0.9774 / 0.9824 | [[13679, 316], [247, 13748]] | Stamp **20260420_143613**; 12/12 epochs; best ep **12**; val_acc **0.9799**; **+0.0045 macro_f1 vs G3 (0.9754)** and **+0.0144 vs G1 (0.9655)**. **Phase G single-seed screen complete — G4 remains best** (G5 ViT 0.9657). `artifacts/train_metrics_20260420_143613.json` |
+| G5 | vit_b_16 | 224 | 64 | **0.9657** | **0.9657** | 9 | 0.1259 | 0.9628 / 0.9686 | [[13475, 520], [440, 13555]] | Stamp **20260421_083208**; best ep **9**; val_acc **0.9656**; **−0.0142 macro_f1 vs G4 (0.9799)** and **+0.0002 vs G1 (0.9655)**. `artifacts/train_metrics_20260421_083208.json` |
 
 ### Phase G — copy-paste `make` commands (run from `model/`)
 
@@ -342,20 +342,41 @@ make train ARGS="--no-verify-csv-paths --disable-decompression-bomb-warning --ar
 
 ### G6 — Multi-seed run on the G1–G5 winner
 
-After picking the row with the best `Val macro_f1` from G1–G5, append `--extra-seeds 43,44` to that row's command (and substitute the winning architecture / image / batch). Example assuming G3 wins:
+**Winner:** G4 (`efficientnet_v2_s @ 288`, batch 48, seed 42, val_macro_f1 **0.9799**). G6 mirrors G4 exactly and adds `--extra-seeds 43,44`:
 
 ```bash
 cd model
-make train ARGS="--no-verify-csv-paths --disable-decompression-bomb-warning --architecture convnext_tiny --image-size 224 --epochs 12 --batch-size 64 --num-workers 16 --head-epochs 2 --backbone-lr 1e-5 --lr 1e-4 --scheduler plateau --plateau-patience 2 --early-stopping-metric macro_f1 --early-stopping-patience 4 --early-stopping-min-delta 0.001 --extra-seeds 43,44"
+make train ARGS="--no-verify-csv-paths --disable-decompression-bomb-warning --architecture efficientnet_v2_s --image-size 288 --epochs 12 --batch-size 48 --num-workers 16 --head-epochs 2 --backbone-lr 1e-5 --lr 1e-4 --scheduler plateau --plateau-patience 2 --early-stopping-metric macro_f1 --early-stopping-patience 4 --early-stopping-min-delta 0.001 --extra-seeds 43,44"
 ```
+
+**Caveat:** G4's best epoch was **12/12** (the monitor was still improving at the end of the budget), so G6 inherits a likely-undertraining cutoff. Kept at 12 ep for parity with G1–G5; the G7 row below extends the budget on the same arch to quantify how much training-time was left on the table.
 
 | # | Config summary | Seeds | Mean macro_f1 | Spread | Notes |
 |---|----------------|-------|---------------|--------|-------|
-| G6 | _winner from G1–G5_ | `42,43,44` | _TBD_ | _TBD_ | Compare against Phase F2 mean (0.9890) on the same data layout. |
+| G6 | `efficientnet_v2_s @ 288`, batch 48, 12 ep, plateau, lr 1e-4 / backbone-lr 1e-5 | `42,43,44` | **0.9795** | **0.0026** (0.9782→0.9808) | Stamp **20260422_002356**; per-seed macro_f1 (detailed val): **42** **0.9808** (best ep **11**), **43** **0.9782** (ep **11**), **44** **0.9796** (ep **12**; val_loss **0.0676**, CM **[[13769, 226], [344, 13651]]**). **−0.0095** vs Phase F2 mean (0.9890, old data). **Best seed: 42** (0.9808) — slightly **above** G4’s earlier single-seed log (0.9799), but the **mean** (0.9795) reflects cross-seed variance. `artifacts/train_metrics_20260422_002356_seed{42,43,44}.json` |
+
+### G7 — Extended-budget variant on the G6 winner arch
+
+G4's best epoch was the last one, so 12 epochs was not enough to saturate `efficientnet_v2_s` on the merged ~140k data. G7 runs the same config at **16 epochs** to check whether additional training buys another ~0.003-0.005 macro_f1 before we commit to multi-seed at the longer budget.
+
+**Tradeoff:** G7 is **not** apples-to-apples with G1-G6 (different epoch budget), so it cannot replace G6 — it's a diagnostic row. If G7 > G6 meaningfully (>0.005 above G6's best seed), consider rerunning G6 at 16 ep as a second multi-seed line; otherwise 12 ep is fine.
+
+Single-seed (42) first, so we don't burn 3x compute on a question that might resolve in one run:
+
+```bash
+cd model
+make train ARGS="--no-verify-csv-paths --disable-decompression-bomb-warning --architecture efficientnet_v2_s --image-size 288 --epochs 16 --batch-size 48 --num-workers 16 --head-epochs 2 --backbone-lr 1e-5 --lr 1e-4 --scheduler plateau --plateau-patience 2 --early-stopping-metric macro_f1 --early-stopping-patience 4 --early-stopping-min-delta 0.001"
+```
+
+| # | Config summary | Seeds | Val macro_f1 | Best epoch | Notes |
+|---|----------------|-------|--------------|------------|-------|
+| G7 | `efficientnet_v2_s @ 288`, batch 48, **16 ep**, plateau, lr 1e-4 / backbone-lr 1e-5 | `42` | **0.9817** | **13** | Stamp **20260423_004056**; detailed val on best ckpt — val_loss **0.0660**, val_acc **0.9817**, bal_acc **0.9817**, per-class recall **0.9847 / 0.9786**, CM **[[13781, 214], [299, 13696]]**. Ran full 16/16 (patience reached 3/4 at ep 16, no early stop). **+0.0018 vs G4** (0.9799, 12 ep same arch/seed) and **+0.0009 vs G6 best seed** (seed 42 = 0.9808). **Below the 0.005 decision threshold → 12 ep is fine, do not rerun G6 at 16 ep.** `artifacts/train_metrics_20260423_004056.json` |
+
+**G7 interpretation.** The 4 extra epochs bought a small, non-zero improvement (+0.0018 macro_f1 over G4). The best epoch shifted from ep 12/12 → ep 13/16, confirming G4 was mildly under-trained, but the gain is **noise-adjacent** — G6's seed-to-seed spread was 0.0026 (0.9782→0.9808), i.e. the G4→G7 delta is comparable to one step of cross-seed variance. Per the G7 decision rule (>0.005 above G6's best seed → rerun G6 at 16 ep), G7 does **not** clear the bar. Conclusion: **G6 (12 ep, 3 seeds, mean 0.9795)** stays as the official multi-seed line for shipping; extending to 16 epochs does not justify the ~33% extra compute. Per-class balance also tilted slightly more toward class 0 recall (0.9847) vs 1 (0.9786) at the longer budget, worth noting but inside the noise floor.
 
 ### After Phase G — suggested next steps
 
-1. **Promote the winning checkpoint** — copy/keep `artifacts/best_real_fake_<stamp>_seed<best>.pt` and update `DETECTOR_JOB_TODO.md` (item 1: configurable checkpoint path) to point production to it.
+1. **Promote the winning checkpoint — DONE (2026-04-23).** Shipping checkpoint is **G6 seed 42** → `artifacts/best_real_fake_20260422_002356_seed42.pt` (val macro_f1 **0.9808**). `artifacts/best_real_fake.pt` was re-pointed at these bytes (sha256 `08f38a67…3106b5`) because the latest training run (G7 diagnostic) had overwritten it. `backend/app/jobs/detector_job.rb` now (a) pins this stamp as `DEFAULT_CHECKPOINT_FILENAME`, (b) supports ENV overrides `CLASSIFIER_PYTHON` / `CLASSIFIER_SCRIPT` / `CLASSIFIER_CHECKPOINT` / `CLASSIFIER_DEVICE`, and (c) passes `--checkpoint` explicitly to `classify.py` so training reruns cannot silently rotate the deployed model. G7 (0.9817, 16 ep single-seed) was **not** promoted because its +0.0009 edge over G6 seed 42 is inside G6's cross-seed spread of 0.0026 — see the G7 interpretation paragraph above. See `DETECTOR_JOB_TODO.md` item 1 for the production contract.
 2. **External / held-out labeled benchmark** — `make eval-external EVAL_ARGS="--labeled-csv data/source_labels.csv --csv-root data --checkpoint artifacts/best_real_fake_<stamp>_seed<best>.pt"`. Expect lower macro-F1 than the holdout — that gap is the domain-shift signal, not a regression.
 3. **Calibration (optional)** — re-run the winner with `--fit-temperature` (Phase C5 style) if downstream code wants calibrated probabilities.
 4. **Image-size sweep on the winner** — only if the winner is **not** ViT (ViT is locked at 224); try `--image-size 320` if VRAM permits.
@@ -427,7 +448,7 @@ make train ARGS="--no-verify-csv-paths --disable-decompression-bomb-warning --ar
 
 ### Decision rule for Phase H
 
-Compare H2 (the honest comparison row) against the Phase G winner's macro_f1 (currently G1 = **0.9655** until G3–G5 land):
+Compare H2 (the honest comparison row) against the Phase G winner's macro_f1 (after G1–G5: **G4** = **0.9799**):
 
 - **Within ~0.005** → ImageNet prior contributes little on this dataset; `scratch_cnn_v1` becomes a viable IP-clean shipping option. Promote to H3.
 - **0.005 to 0.020 below** → prior is helping but not decisively; keep pretrained for production, mark scratch as "viable fallback".
@@ -510,3 +531,10 @@ Expected output: `OK scratch_cnn_v1: params=4,906,818 (4.91M), forward shape=(2,
 | 2026-04-19 | — | Phase G1 (`efficientnet_b0` @ 288, seed 42) results logged on the merged ~140k dataset: best ep **11**, val_macro_f1 **0.9655**, bal_acc **0.9655**, val_loss **0.0926**, per-class recall **0.9672 / 0.9637**, CM **[[13536, 459], [508, 13487]]** (stamp **20260419_011716**). **−0.0235 macro_f1 vs Phase F2 mean (0.9890)** on the *old* dataset. Train/val curves (train_loss 0.0601 / train_acc 0.9778 vs val_loss 0.0916 / val_acc 0.9660 at ep12) show the gap closing rather than diverging → **not overfitting**; consistent with a harder, more diverse dataset within the same recipe. G1 is the new re-anchor row that G2–G5 must beat. |
 | 2026-04-19 | — | Phase G2 (`resnet50` @ 224, batch 96, seed 42) logged: best ep **9**, val_macro_f1 **0.9507**, bal_acc **0.9507**, val_loss **0.1441**, per-class recall **0.9543 / 0.9471**, CM **[[13356, 639], [741, 13254]]** (stamp **20260419_123320**). **−0.0148 macro_f1 vs G1** (0.9655). |
 | 2026-04-19 | — | Added **Phase H** (from-scratch ablation): new arch `scratch_cnn_v1` in `train/scratch_cnn.py` (~4.9M params, hand-authored ResNet-style CNN, no torchvision/ImageNet weights). Wired through `train/model.py::create_classifier` + `apply_train_stage` (both stages unfreeze all — no pretrained backbone to protect) and `train/entry.py::_build_optimizer` (single AdamW param group at `--lr`; `--backbone-lr` ignored with a warning). Inference path unchanged: `classify.py` re-instantiates via `create_classifier` from the checkpoint's `architecture` field. Smoke test: `python -m train.scratch_cnn`. Phase H1 (12 ep, compute-equal vs G1) and H2 (30 ep, compute-fair) screening rows + decision rule + H3 multi-seed promotion path documented. |
+| 2026-04-20 | — | Phase G3 (`convnext_tiny` @ 224, batch 64, seed 42) results logged on the merged ~140k dataset: best ep **11**, val_macro_f1 **0.9754**, bal_acc **0.9754**, val_loss **0.0898**, per-class recall **0.9753 / 0.9755**, CM **[[13649, 346], [343, 13652]]** (stamp **20260420_101052**). **+0.0099 macro_f1 vs G1 (0.9655)** and substantially tighter class balance. Superseded as leader by G4. |
+| 2026-04-20 | — | Phase G4 (`efficientnet_v2_s` @ 288, batch 48, seed 42): detailed validation on best checkpoint — val_loss **0.0700**, val_acc **0.9799**, bal_acc **0.9799**, macro_f1 **0.9799**, per-class recall **0.9774 / 0.9824**, CM **[[13679, 316], [247, 13748]]** (stamp **20260420_143613**). Best ep **12** (12/12 epochs). New Phase G leader pending G5. `artifacts/train_metrics_20260420_143613.json` |
+| 2026-04-21 | — | Phase G5 (`vit_b_16` @ 224, batch 64, seed 42): detailed validation on best checkpoint — val_loss **0.1259**, val_acc **0.9656**, bal_acc **0.9657**, macro_f1 **0.9657**, per-class recall **0.9628 / 0.9686**, CM **[[13475, 520], [440, 13555]]** (stamp **20260421_083208**). Best ep **9**. **−0.0142 macro_f1 vs G4 (0.9799)**; **+0.0002 vs G1 (0.9655)**. Phase G single-seed screen **complete**; **G4** is the G1–G5 winner for G6 multi-seed. `artifacts/train_metrics_20260421_083208.json` |
+| 2026-04-21 | — | Concretised **G6** command on the G4 winner arch (`efficientnet_v2_s @ 288`, batch 48, `--extra-seeds 43,44`), replacing the earlier `convnext_tiny` example-template. Added **G7** diagnostic row: single-seed `efficientnet_v2_s @ 288` at **16 epochs** (vs G6's 12) to quantify how much G4's "best ep = 12/12" cutoff left on the table before we commit to multi-seed at an extended budget. |
+| 2026-04-22 | — | **G6** multi-seed complete (stamp **20260422_002356**): seeds **42,43,44** macro_f1 **0.9808 / 0.9782 / 0.9796** (mean **0.9795**, range **0.0026**). **−0.0095** vs F2 mean (0.9890) on the prior dataset distribution. `artifacts/train_metrics_20260422_002356_seed{42,43,44}.json` |
+| 2026-04-23 | — | **G7** diagnostic complete (stamp **20260423_004056**): `efficientnet_v2_s @ 288`, batch 48, **16 ep**, seed 42 → macro_f1 **0.9817** at best ep **13** (val_loss 0.0660, bal_acc 0.9817, per-class recall 0.9847/0.9786, CM [[13781,214],[299,13696]]). **+0.0018 vs G4** (12 ep, same seed) and **+0.0009 vs G6 best seed** — below the 0.005 decision threshold, so **12 ep stays the canonical budget** for this arch. G6 remains the official multi-seed line. `artifacts/train_metrics_20260423_004056.json` |
+| 2026-04-23 | — | **Promoted Phase G6 seed 42 to production.** `artifacts/best_real_fake.pt` re-pointed at the G6 seed 42 bytes (sha256 `08f38a67…3106b5`); `backend/app/jobs/detector_job.rb` gains ENV-overridable `CLASSIFIER_PYTHON` / `CLASSIFIER_SCRIPT` / `CLASSIFIER_CHECKPOINT` / `CLASSIFIER_DEVICE` constants and now passes `--checkpoint` explicitly (pinned default: `best_real_fake_20260422_002356_seed42.pt`). Closes `DETECTOR_JOB_TODO.md` item 1. |

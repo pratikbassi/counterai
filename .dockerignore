@@ -1,0 +1,20 @@
+.git
+**/node_modules
+**/.git
+
+# Frontend is built separately outside this image for MVP.
+frontend/
+
+# Logs and ephemeral
+**/log/*
+**/tmp/*
+backend/storage/uploads/*
+backend/storage/**/*sqlite*
+
+# Secrets (provide via env / mounted files at runtime)
+.env
+.env.*
+backend/config/master.key
+
+# Huge / non-inference datasets (trainer only)
+model/data/
