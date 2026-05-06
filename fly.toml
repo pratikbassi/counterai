@@ -1,0 +1,73 @@
+# Fly.io app config for CounterAI (Rails API + Python classifier in one image).
+# Build context is the repo root so the root-level Dockerfile picks up
+# backend/, model/, and the pinned checkpoint under model/artifacts/.
+#
+# One-time bootstrap (see SETUP.md / chat notes):
+#   fly launch --no-deploy --copy-config --name counterai
+#   fly mpg create   # or: fly pg create  (managed Postgres)
+#   fly mpg attach <db-cluster> -a counterai
+#   fly volume create uploads --region <region> --size 10
+#   fly secrets set RAILS_MASTER_KEY="$(cat backend/config/master.key)" \
+#                   FRONTEND_ORIGINS="https://app.example.com"
+#   fly deploy --remote-only
+
+app = "counterai"
+primary_region = "ord"   # change to your closest region (iad, sjc, ams, fra, ...)
+
+[build]
+  dockerfile = "Dockerfile"
+
+# Run Rails migrations once per deploy in an ephemeral machine, before the
+# new app machines accept traffic. The entrypoint also runs db:prepare on
+# boot, but doing it here keeps cold-start latency predictable.
+[deploy]
+  release_command = "bin/rails db:prepare"
+
+[env]
+  RAILS_ENV = "production"
+  PORT = "80"
+  RAILS_LOG_TO_STDOUT = "true"
+  RAILS_SERVE_STATIC_FILES = "true"
+  RAILS_MAX_THREADS = "5"
+  # Run Solid Queue inside Puma on this single web machine. If you scale
+  # web horizontally, set this to "" here and add a dedicated worker
+  # process group below.
+  SOLID_QUEUE_IN_PUMA = "true"
+  CLASSIFIER_DEVICE = "cpu"
+  # CLASSIFIER_TIMEOUT_SEC, CLASSIFIER_CHECKPOINT, etc. inherit Dockerfile defaults.
+
+[http_service]
+  internal_port = 80
+  force_https = true
+  # IMPORTANT: keep at least one machine running so Solid Queue can drain
+  # DetectorJob work. Auto-stopping a machine mid-inference loses the job.
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 20
+    hard_limit = 25
+
+  [[http_service.checks]]
+    grace_period = "30s"
+    interval = "15s"
+    method = "GET"
+    timeout = "5s"
+    path = "/up"
+
+# Active Storage uploads land here (see Dockerfile + docker-compose.yml).
+# Volumes are pinned to a single region; create one volume per machine if
+# you ever scale horizontally (and migrate uploads to S3/R2 first).
+[[mounts]]
+  source = "uploads"
+  destination = "/rails/storage/uploads"
+  initial_size = "10gb"
+
+# Sized for CPU PyTorch inference + Puma + Solid Queue on one box.
+# Bump memory_mb to 4096 if you see OOMs on first inference (Torch loads lazily).
+[[vm]]
+  size = "shared-cpu-2x"
+  memory = "2gb"
